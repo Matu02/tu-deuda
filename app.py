@@ -50,7 +50,7 @@ st.write("Consultá la deuda financiera y los cheques rechazados de una empresa 
 
 with st.form("consulta"):
     field, action = st.columns([4, 1], vertical_alignment="bottom")
-    value = field.text_input("CUIT de la empresa", value="30532847547", placeholder="30-53284754-7")
+    value = field.text_input("CUIT de la empresa", value="", placeholder="XX-XXXXXXXX-X")
     submitted = action.form_submit_button("Consultar BCRA", type="primary", width="stretch")
 
 if submitted:

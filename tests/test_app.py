@@ -5,7 +5,7 @@ from streamlit.testing.v1 import AppTest
 
 def report_fixture():
     return {
-        "cuit": "30532847547", "consultado": "2026-10-25T23:00:00+00:00", "errores": {},
+        "cuit": "30000000007", "consultado": "2026-10-25T23:00:00+00:00", "errores": {},
         "actual": {"denominacion": "EMPRESA DE PRUEBA", "periodos": [
             {"periodo": "202608", "entidades": [{"entidad": "Banco A", "monto": 10}]}]},
         "historicas": {"periodos": [
@@ -18,7 +18,9 @@ def report_fixture():
 def test_submit_renders_both_charts_and_full_table():
     app = AppTest.from_file("app.py").run()
     assert not app.exception
+    assert app.text_input[0].value == ""
     with patch("bcra.fetch_report", return_value=report_fixture()):
+        app.text_input[0].set_value("30000000007")
         app.button[0].click().run()
     assert not app.exception
     assert len(app.get("plotly_chart")) == 2
@@ -58,9 +60,11 @@ def test_partial_submission_can_be_retried():
     data["historicas"] = None
     data["errores"] = {"historicas": "BCRA no disponible"}
     with patch("bcra.fetch_report", return_value=data) as fetch:
+        app.text_input[0].set_value("30000000007")
         app.button[0].click().run()
         assert not app.exception
         assert app.warning
+        app.text_input[0].set_value("30000000007")
         app.button[0].click().run()
         assert fetch.call_count == 2
     assert not app.exception

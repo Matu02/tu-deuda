@@ -17,7 +17,7 @@ python -m venv .venv
 .venv/bin/python -m streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
-Ingresar un CUIT y pulsar **Consultar BCRA**. Ejemplo: `30532847547` (BAZAR AVENIDA S. A.).
+Ingresar el CUIT de la empresa a consultar y pulsar **Consultar BCRA**.
 
 ## Pruebas
 

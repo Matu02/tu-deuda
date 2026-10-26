@@ -7,12 +7,13 @@ from bcra import BCRAError, checks_frame, debt_frame, fetch_endpoint, fetch_repo
 from charts import checks_chart, debt_chart
 
 
-@pytest.mark.parametrize("value", ["30532847547", "30-53284754-7", " 30532847547 "])
+# CUIT sintético, usado sólo con respuestas simuladas.
+@pytest.mark.parametrize("value", ["30000000007", "30-00000000-7", " 30000000007 "])
 def test_valid_cuit(value):
-    assert normalize_cuit(value) == "30532847547"
+    assert normalize_cuit(value) == "30000000007"
 
 
-@pytest.mark.parametrize("value", ["30532847548", "abc30532847547", "123", "30/53284754/7", ""])
+@pytest.mark.parametrize("value", ["30000000008", "abc30000000007", "123", "30/00000000/7", ""])
 def test_invalid_cuit(value):
     with pytest.raises(ValueError):
         normalize_cuit(value)
@@ -65,7 +66,7 @@ def api_response(code=200, payload=None):
 def call_with_response(response):
     with patch("bcra.requests.Session") as session:
         session.return_value.__enter__.return_value.get.return_value = response
-        return fetch_endpoint("actual", "30532847547")
+        return fetch_endpoint("actual", "30000000007")
 
 
 def test_404_is_no_records():
@@ -89,7 +90,7 @@ def test_partial_failure_keeps_successful_sections():
             raise BCRAError("No disponible")
         return {"identificacion": int(cuit), "periodos": []}
     with patch("bcra.fetch_endpoint", side_effect=fake):
-        report = fetch_report("30532847547")
+        report = fetch_report("30000000007")
     assert report["actual"] is not None
     assert report["historicas"] is None
     assert report["errores"] == {"historicas": "No disponible"}
