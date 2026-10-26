@@ -11,7 +11,7 @@ import threading
 
 import pandas as pd
 
-from bcra import BCRACancelled, BCRAError, BCRARateLimit, checks_frame, fetch_endpoint, normalize_cuit
+from bcra import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit, checks_frame, fetch_endpoint, normalize_cuit
 
 
 def read_table(content: bytes, filename: str, sheet=0) -> pd.DataFrame:
@@ -129,7 +129,7 @@ class BatchJob:
                 except BCRAError as exc:
                     record = {"estado": "error", "error": str(exc), "cheques": [], "razon_social": ""}
                     consecutive_errors += 1
-                    limited = isinstance(exc, BCRARateLimit)
+                    limited = isinstance(exc, (BCRARateLimit, BCRACooldown))
                 except Exception:
                     record = {"estado": "error", "error": "No se pudo interpretar la respuesta de cheques.", "cheques": [], "razon_social": ""}
                     consecutive_errors += 1

@@ -53,6 +53,10 @@ Los pagos posteriores no excluyen un cheque rechazado en la fecha seleccionada.
 - HTTP 429 respeta `Retry-After` (segundos o fecha HTTP), con espera compartida;
   los HTTP 5xx reciben hasta dos reintentos con espera creciente. Si persiste un
   429, o hay cinco empresas con errores consecutivos, el lote se pausa.
+- También se respeta `Retry-After` en HTTP 503. Una espera indicada superior a
+  60 segundos pausa el lote sin bloquear la interfaz ni insistir contra el servicio.
+  Las demás sesiones de este proceso respetan esa misma espera. Un 503 no permite
+  determinar por sí solo si hubo limitación de tráfico o indisponibilidad temporal.
 - **Pausar lote** conserva la solicitud en curso y permite continuar. Los errores,
   fechas no interpretables y pendientes se distinguen de empresas sin cheques.
   Los totales parciales se identifican explícitamente.

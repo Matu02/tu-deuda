@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import re
+import math
 import threading
 import time
 from email.utils import parsedate_to_datetime
@@ -21,6 +22,10 @@ class BCRAError(Exception):
 
 class BCRARateLimit(BCRAError):
     """El servidor sigue limitando las solicitudes luego de los reintentos."""
+
+
+class BCRACooldown(BCRAError):
+    """El servicio pidió una espera larga; devolver el control a la interfaz."""
 
 
 class BCRACancelled(BCRAError):
@@ -48,6 +53,8 @@ class RequestGate:
                 if delay <= 0:
                     self.next_request = time.monotonic() + self.interval
                     return
+                if delay > 60:
+                    raise BCRACooldown(f"El BCRA pidió esperar. Reintentá en aproximadamente {math.ceil(delay)} segundos; no se enviaron nuevas solicitudes.")
             if stop_event is not None:
                 stop_event.wait(min(delay, 0.5))
             else:
@@ -91,6 +98,11 @@ def _get_payload(url: str, allow_not_found: bool = False, stop_event=None) -> di
                     _REQUEST_GATE.defer(max(2 ** attempt, retry_after_seconds(response.headers.get("Retry-After"))))
                     if attempt == 2:
                         raise BCRARateLimit("El BCRA limitó las solicitudes (HTTP 429). El lote se pausó; reanudalo más tarde.")
+                elif response.status_code == 503 and response.headers.get("Retry-After"):
+                    seconds = retry_after_seconds(response.headers["Retry-After"])
+                    _REQUEST_GATE.defer(max(2 ** attempt, seconds))
+                    if seconds > 60 or attempt == 2:
+                        raise BCRACooldown(f"El BCRA devolvió HTTP 503 y pidió esperar {math.ceil(seconds)} segundos. El lote se pausó; reanudalo más tarde.")
                 elif response.status_code in (500, 502, 503, 504) and attempt < 2:
                     _REQUEST_GATE.defer(2 ** attempt)
                 else:

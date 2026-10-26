@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 import pytest
 
-from bcra import BCRACancelled, BCRARateLimit, RequestGate, _get_payload
+from bcra import BCRACancelled, BCRACooldown, BCRARateLimit, RequestGate, _get_payload
 from bulk import BatchJob, daily_result, extract_cuits, read_table, report_frames, restore_job
 from charts import companies_chart
 
@@ -93,10 +93,11 @@ def test_3001_cuits_only_cheques_one_call_each_and_no_duplicate_on_resume():
     assert frame.monto.sum() == pytest.approx(3001 * 100.25)
 
 
-def test_429_pauses_batch_and_resume_does_not_skip_failed_company():
+@pytest.mark.parametrize("error", [BCRARateLimit("HTTP 429"), BCRACooldown("HTTP 503: esperar")])
+def test_server_pause_stops_batch_and_resume_does_not_skip_failed_company(error):
     cuits = [synthetic_cuit(1), synthetic_cuit(2)]
     job = BatchJob(cuits, "2026-01-12")
-    with patch("bulk.fetch_endpoint", side_effect=BCRARateLimit("HTTP 429")) as fetch:
+    with patch("bulk.fetch_endpoint", side_effect=error) as fetch:
         run_job(job)
         assert fetch.call_count == 1
     snapshot = job.snapshot()
@@ -156,6 +157,36 @@ def test_http429_respects_retry_after_before_retrying():
         assert _get_payload("https://api.bcra.gob.ar/test")["status"] == 200
         gate.defer.assert_called_once_with(17)
         assert gate.wait.call_count == 2
+
+
+def test_http503_with_long_retry_after_pauses_without_retrying():
+    response = Mock(status_code=503, headers={"Retry-After": "3743"})
+    with patch("bcra._REQUEST_GATE") as gate, patch("bcra.requests.Session") as session:
+        session.return_value.__enter__.return_value.get.return_value = response
+        with pytest.raises(BCRACooldown, match="503.*3743"):
+            _get_payload("https://api.bcra.gob.ar/test")
+        gate.defer.assert_called_once_with(3743)
+        assert session.return_value.__enter__.return_value.get.call_count == 1
+
+
+def test_http503_with_short_retry_after_retries_after_wait():
+    response = Mock(status_code=503, headers={"Retry-After": "5"})
+    success = Mock(status_code=200)
+    success.json.return_value = {"status": 200}
+    with patch("bcra._REQUEST_GATE") as gate, patch("bcra.requests.Session") as session:
+        session.return_value.__enter__.return_value.get.side_effect = [response, success]
+        assert _get_payload("https://api.bcra.gob.ar/test")["status"] == 200
+        gate.defer.assert_called_once_with(5)
+        assert gate.wait.call_count == 2
+
+
+def test_long_shared_cooldown_returns_immediately_without_sleep_or_request():
+    gate = RequestGate()
+    with patch("bcra.time.sleep") as sleep:
+        gate.defer(3743)
+        with pytest.raises(BCRACooldown):
+            gate.wait()
+        sleep.assert_not_called()
 
 
 def test_cancelled_inflight_batch_keeps_result_and_does_not_start_next():
