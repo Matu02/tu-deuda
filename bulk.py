@@ -67,7 +67,7 @@ def extract_cuits(table: pd.DataFrame, start_row=2, column=0):
     return cuits, pd.DataFrame(invalid), duplicates, blanks
 
 
-def checks_result(result: dict) -> dict:
+def checks_result(result: dict, rejection_date=None) -> dict:
     frame = checks_frame(result)
     invalid_dates = 0
     if not frame.empty:
@@ -75,11 +75,13 @@ def checks_result(result: dict) -> dict:
             raise BCRAError("El detalle de cheques no incluye monto.")
         dates = pd.to_datetime(frame.get("fechaRechazo", pd.Series(index=frame.index, dtype="object")), errors="coerce", utc=True, format="mixed")
         invalid_dates = int(dates.isna().sum())
+        if rejection_date:
+            frame = frame.loc[dates.dt.strftime("%Y-%m-%d") == rejection_date].copy()
         amounts = pd.to_numeric(frame["monto"], errors="coerce")
         if amounts.isna().any() or not amounts.map(math.isfinite).all() or (amounts < 0).any():
             raise BCRAError("El BCRA devolvió un monto de cheque no válido.")
         frame["monto"] = amounts
-    return {"estado": "ok",
+    return {"estado": "parcial" if rejection_date and invalid_dates else "ok",
             "razon_social": result.get("denominacion") or "",
             "cheques": json.loads(frame.to_json(orient="records")),
             "fechas_invalidas": invalid_dates,
@@ -89,9 +91,10 @@ def checks_result(result: dict) -> dict:
 class BatchJob:
     """Hasta tres consultas en vuelo, sin llamadas a Streamlit desde trabajadores."""
 
-    def __init__(self, cuits, target_date, records=None):
+    def __init__(self, cuits, target_date, records=None, rejection_date=None):
         self.cuits = list(dict.fromkeys(normalize_cuit(c) for c in cuits))
         self.target_date = date.fromisoformat(str(target_date)).isoformat()
+        self.rejection_date = date.fromisoformat(rejection_date).isoformat() if rejection_date else None
         self.records = deepcopy(records or {})
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -133,7 +136,7 @@ class BatchJob:
                 limited = False
                 try:
                     result = fetch_endpoint("cheques", cuit, stop_event=self.stop_event)
-                    record = checks_result(result)
+                    record = checks_result(result, self.rejection_date)
                 except BCRACancelled:
                     return
                 except BCRAError as exc:
@@ -166,7 +169,7 @@ class BatchJob:
 
     def snapshot(self):
         with self.lock:
-            return {"version": 2, "fecha": self.target_date, "cuits": self.cuits.copy(),
+            return {"version": 3, "fecha_rechazo": self.rejection_date, "fecha": self.target_date, "cuits": self.cuits.copy(),
                     "resultados": deepcopy(self.records), "running": self.running, "mensaje": self.message, "reintentar_desde": self.retry_at}
 
 
@@ -176,7 +179,7 @@ def restore_job(content: bytes) -> BatchJob:
         if len(content) > 100 * 1024 * 1024:
             raise ValueError("Archivo de avance demasiado grande.")
         data = json.loads(content)
-        if data["version"] not in (1, 2) or not isinstance(data["cuits"], list) or not isinstance(data["resultados"], dict):
+        if data["version"] not in (1, 2, 3) or not isinstance(data["cuits"], list) or not isinstance(data["resultados"], dict):
             raise ValueError("Formato de avance no válido.")
         target = date.fromisoformat(data["fecha"]).isoformat()
         cuits = list(dict.fromkeys(normalize_cuit(c) for c in data["cuits"]))
@@ -199,7 +202,7 @@ def restore_job(content: bytes) -> BatchJob:
                 if record["estado"] == "ok":
                     record["estado"] = "parcial"
                     record["error"] = "Consulta anterior filtrada por fecha: requiere nueva consulta completa."
-        job = BatchJob(cuits, target, records=data["resultados"])
+        job = BatchJob(cuits, target, records=data["resultados"], rejection_date=data.get("fecha_rechazo") if data["version"] == 3 else None)
         if legacy:
             job.message = "Avance anterior filtrado por fecha. Al continuar, se volverán a consultar todos los CUIT para obtener los resultados completos."
         retry_at = data.get("reintentar_desde")

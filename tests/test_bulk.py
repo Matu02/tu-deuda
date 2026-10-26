@@ -318,7 +318,7 @@ def test_legacy_empty_completed_results_are_requeried():
         run_job(restored)
         assert fetch.call_count == 1
     assert len(restored.records[cuit]["cheques"]) == 2
-    assert restored.snapshot()["version"] == 2
+    assert restored.snapshot()["version"] == 3
 
 
 def test_checkpoint_preserves_cheque_without_date():
@@ -328,3 +328,14 @@ def test_checkpoint_preserves_cheque_without_date():
     job = BatchJob([cuit], "2026-01-12", records={cuit: checks_result(result)})
     restored = restore_job(json.dumps(job.snapshot()).encode())
     assert len(restored.records[cuit]["cheques"]) == 2
+
+
+def test_specific_date_filter_and_checkpoint_preserve_scope():
+    result = checks_result(response(), "2026-01-12")
+    assert len(result["cheques"]) == 1
+    cuit = synthetic_cuit(1)
+    job = BatchJob([cuit], "2026-01-13", records={cuit: result}, rejection_date="2026-01-12")
+    restored = restore_job(json.dumps(job.snapshot()).encode())
+    assert restored.rejection_date == "2026-01-12"
+    assert len(restored.records[cuit]["cheques"]) == 1
+    assert len(checks_result(response())["cheques"]) == 2

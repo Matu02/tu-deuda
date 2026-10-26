@@ -31,8 +31,8 @@ las filas vacías y se consulta una sola vez cada CUIT único. Las filas inváli
 se informan y se pueden descargar para corregirlas.
 
 Este modo consulta **sólo ChequesRechazados**, no deudas ni historial de deuda.
-Se registran **todos** los cheques que devuelve la API, sin filtrar por
-`fechaRechazo`. La razón social se obtiene de `results.denominacion`. La fecha
+Por defecto se registran **todos** los cheques que devuelve la API. También se
+puede elegir una fecha de rechazo específica en el selector de alcance. La razón social se obtiene de `results.denominacion`. La fecha
 mostrada en el título identifica el inicio de la consulta, no restringe los resultados.
 
 El reporte muestra empresas con cheques, cantidad y monto total en ARS, torta por
@@ -41,7 +41,7 @@ vista previa. Los CSV incluyen todos los resultados, CUIT, razón social y todos
 los campos de cada cheque. Se incluyen cheques pagados y con fecha de rechazo
 vacía o no interpretable; el monto rechazado no es necesariamente saldo pendiente.
 
-Los nuevos archivos de avance usan versión 2. Al cargar uno de versión 1, que
+Los nuevos archivos de avance usan versión 3 y guardan el filtro elegido. Al cargar uno de versión 1, que
 filtraba por fecha, los CUIT completados se marcan como parciales para volver a
 consultarlos. Los resultados descartados no pueden recuperarse del JSON viejo:
 se necesita una nueva consulta. Los avances v2 completos no repiten esos CUIT.
@@ -120,3 +120,16 @@ catálogo consultado y se muestra como **Entidad no identificada (código 1)**.
 No se incluyen datos empresariales reales en el repositorio. Las consultas sólo
 se realizan al enviar el formulario. La aplicación no tiene persistencia propia;
 las respuestas se mantienen temporalmente en la memoria del servidor y la sesión.
+
+
+## Selección de alcance del lote
+
+El selector **Cheques a incluir** permite elegir **Toda la historia informada por
+el BCRA** (predeterminado) o **Una fecha de rechazo específica**. En este último
+caso se muestra un calendario y se filtra por `fechaRechazo`. Historia completa
+significa todos los registros que devuelve la API, sin garantizar información
+que el BCRA ya no publique. Ambos modos incluyen cheques pagados posteriormente.
+El reporte identifica el filtro aplicado. Cambiar el selector no altera un lote
+existente: hay que iniciar uno nuevo. Los avances v3 guardan `fecha_rechazo`
+(null para historia completa); los v2 se recuperan como historia completa y los
+v1 conservan la migración que requiere volver a consultar los CUIT filtrados.

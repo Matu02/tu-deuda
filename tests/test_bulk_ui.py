@@ -93,3 +93,12 @@ def test_503_deadline_disables_resume_button():
     assert not app.exception
     assert next(b for b in app.button if b.label == "Continuar / reintentar pendientes").disabled
     assert any("Caída la API BCRA" in e.value for e in app.error)
+
+
+def test_scope_selector_reveals_calendar_only_for_specific_date():
+    app = AppTest.from_file("app.py").run()
+    assert not app.exception and not app.date_input
+    app.radio[0].set_value("Una fecha de rechazo específica").run()
+    assert not app.exception and len(app.date_input) == 1
+    app.radio[0].set_value("Toda la historia informada por el BCRA").run()
+    assert not app.exception and not app.date_input

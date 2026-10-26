@@ -29,7 +29,7 @@ def test_initial_screen_has_individual_search_and_file_upload_together():
     app = AppTest.from_file("app.py").run()
     assert not app.exception
     assert app.text_input[0].label == "CUIT de la empresa"
-    assert not app.radio
+    assert app.radio[0].value == "Toda la historia informada por el BCRA"
     labels = [widget.proto.label for widget in app.get("file_uploader")]
     assert "Insertar Excel/CSV con CUITs" in labels
 

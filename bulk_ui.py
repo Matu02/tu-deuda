@@ -40,9 +40,11 @@ def _active():
 
 def render_bulk(load_entities):
     st.subheader("Cheques rechazados por archivo")
-    st.write("Adjuntá la lista de clientes. Se registran todos los cheques rechazados que informa el BCRA para cada CUIT, sin filtrar por fecha de rechazo.")
+    st.write("Adjuntá la lista de clientes. Elegí toda la historia informada por el BCRA o los cheques de una fecha de rechazo específica.")
     today = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).date()
     target = today
+    scope = st.radio("Cheques a incluir", ["Toda la historia informada por el BCRA", "Una fecha de rechazo específica"])
+    rejection_date = st.date_input("Fecha de rechazo", value=today, max_value=today).isoformat() if scope == "Una fecha de rechazo específica" else None
     uploaded = st.file_uploader("Insertar Excel/CSV con CUITs", type=["xlsx", "csv"], key="bulk_upload", help="Excel .xlsx o CSV de hasta 20 MB. Podés elegir la columna y la primera fila con CUIT.")
     st.caption("Hasta 3 solicitudes por segundo y 3 consultas simultáneas por lote. Una consulta de cheques por CUIT único, más el catálogo de entidades. El ritmo se comparte entre sesiones de este servidor e incluye los reintentos; no se coordina entre servidores distintos. Las esperas indicadas por el BCRA se respetan automáticamente.")
     if uploaded is not None:
@@ -75,7 +77,7 @@ def render_bulk(load_entities):
                 with st.spinner("Preparando catálogo de entidades…"):
                     if not _catalog(load_entities):
                         return
-                job = BatchJob(cuits, target)
+                job = BatchJob(cuits, target, rejection_date=rejection_date)
                 st.session_state["bulk_job"] = job
                 job.start()
         except (ValueError, OSError, ImportError, pd.errors.ParserError) as exc:
@@ -111,7 +113,8 @@ def render_progress():
     pending = total - attempted
     st.divider()
     st.subheader(f"Reporte de cheques · {snapshot['fecha']}")
-    st.caption("La fecha del reporte corresponde al inicio de la consulta, no a la fecha de rechazo. Se incluyen todos los cheques informados.")
+    st.info(f"Filtro del lote: fecha de rechazo {job.rejection_date}" if job.rejection_date else "Filtro del lote: toda la historia informada por el BCRA")
+    st.caption("Cambiar los controles superiores no modifica este lote. Para cambiar el filtro, iniciá un nuevo lote.")
     st.progress(attempted / total if total else 0, text=f"{attempted} de {total} CUIT procesados · {ok} completos · {problems} con errores o datos parciales · {pending} pendientes")
     st.caption(snapshot["mensaje"])
     if not job.can_resume():
@@ -126,7 +129,7 @@ def render_progress():
     if snapshot["running"] or pending or problems:
         st.warning("Reporte parcial: los totales corresponden sólo a los cheques obtenidos hasta ahora. Los CUIT pendientes o con error no se consideran empresas sin cheques.")
     if not summary.empty and summary["fechas_invalidas"].sum():
-        st.warning("Hay cheques con fechas de rechazo no informadas o no interpretables. Se conservan en el detalle y se incluyen en los totales.")
+        st.warning("Hay fechas de rechazo no informadas o no interpretables. En historia completa se conservan; con fecha específica no pueden asignarse al día y el CUIT queda parcial.")
     if st.session_state.get("bulk_catalog_error"):
         st.caption("Catálogo no disponible: se conservan los códigos de entidad originales.")
     count = frame["CUIT"].nunique() if not frame.empty else 0
@@ -135,7 +138,7 @@ def render_progress():
     a.metric("Empresas con cheques rechazados", count)
     b.metric("Monto total rechazado (ARS)", money(amount))
     c.metric("Cheques rechazados", len(frame))
-    st.caption("Incluye todos los cheques devueltos por el BCRA, incluso los pagados posteriormente. El total rechazado no representa necesariamente saldo pendiente.")
+    st.caption("Incluye los cheques correspondientes al filtro indicado, incluso los pagados posteriormente. El total rechazado no representa necesariamente saldo pendiente.")
     if not frame.empty:
         if amount > 0:
             left, right = st.columns(2)
