@@ -52,3 +52,17 @@ def checks_chart(frame: pd.DataFrame):
     fig.update_traces(textinfo="percent+label", hovertemplate="%{label}<br>ARS %{value:,.2f}<br>%{percent}<extra></extra>")
     fig.update_layout(height=400, separators=",.", margin=dict(t=20, b=20), legend_title_text="Causal")
     return fig
+
+
+def companies_chart(frame: pd.DataFrame):
+    data = frame.groupby(["CUIT", "razon_social"], as_index=False, dropna=False)["monto"].sum()
+    data = data.sort_values(["monto", "CUIT"], ascending=[False, True])
+    top = data.head(10).copy()
+    top["Empresa"] = top["razon_social"].fillna("Sin razón social") + " · " + top["CUIT"].astype(str)
+    values = top[["Empresa", "monto"]]
+    if len(data) > 10:
+        values = pd.concat([values, pd.DataFrame([{"Empresa": "Resto de empresas", "monto": data.iloc[10:]["monto"].sum()}])], ignore_index=True)
+    fig = px.pie(values, names="Empresa", values="monto", color_discrete_sequence=COLORS)
+    fig.update_traces(textinfo="percent", hovertemplate="%{label}<br>ARS %{value:,.2f}<br>%{percent}<extra></extra>")
+    fig.update_layout(height=470, separators=",.", margin=dict(t=20, b=20), legend=dict(orientation="h", y=-0.1))
+    return fig

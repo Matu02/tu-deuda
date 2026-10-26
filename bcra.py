@@ -3,11 +3,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import re
+import threading
+import time
+from email.utils import parsedate_to_datetime
 
 import pandas as pd
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 BASE_URL = "https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas"
 ENTITIES_URL = "https://api.bcra.gob.ar/cheques/v1.0/entidades"
@@ -16,6 +17,56 @@ ENDPOINTS = {"actual": "", "historicas": "Historicas/", "cheques": "ChequesRecha
 
 class BCRAError(Exception):
     """Error consultable sin exponer detalles internos de red."""
+
+
+class BCRARateLimit(BCRAError):
+    """El servidor sigue limitando las solicitudes luego de los reintentos."""
+
+
+class BCRACancelled(BCRAError):
+    """Consulta pausada por el usuario."""
+
+
+class RequestGate:
+    """Ritmo compartido por todos los usuarios e hilos de este proceso."""
+
+    def __init__(self, interval=1.0):
+        self.interval = interval
+        self.lock = threading.Lock()
+        self.next_request = 0.0
+
+    def defer(self, seconds):
+        with self.lock:
+            self.next_request = max(self.next_request, time.monotonic() + seconds)
+
+    def wait(self, stop_event=None):
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                raise BCRACancelled("Consulta pausada.")
+            with self.lock:
+                delay = self.next_request - time.monotonic()
+                if delay <= 0:
+                    self.next_request = time.monotonic() + self.interval
+                    return
+            if stop_event is not None:
+                stop_event.wait(min(delay, 0.5))
+            else:
+                time.sleep(min(delay, 0.5))
+
+
+_REQUEST_GATE = RequestGate()
+
+
+def retry_after_seconds(value):
+    """Retry-After admite segundos o una fecha HTTP."""
+    try:
+        seconds = float(value)
+        return max(0, seconds) if pd.notna(seconds) and seconds != float("inf") else 60
+    except (ValueError, TypeError):
+        try:
+            return max(0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
+        except (ValueError, TypeError, OverflowError):
+            return 60
 
 
 def normalize_cuit(value: str) -> str:
@@ -30,12 +81,20 @@ def normalize_cuit(value: str) -> str:
     return digits
 
 
-def _get_payload(url: str, allow_not_found: bool = False) -> dict:
-    retry = Retry(total=2, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
+def _get_payload(url: str, allow_not_found: bool = False, stop_event=None) -> dict:
     try:
         with requests.Session() as session:
-            session.mount("https://", HTTPAdapter(max_retries=retry))
-            response = session.get(url, timeout=(8, 30))
+            for attempt in range(3):
+                _REQUEST_GATE.wait(stop_event)
+                response = session.get(url, timeout=(8, 30))
+                if response.status_code == 429:
+                    _REQUEST_GATE.defer(max(2 ** attempt, retry_after_seconds(response.headers.get("Retry-After"))))
+                    if attempt == 2:
+                        raise BCRARateLimit("El BCRA limitó las solicitudes (HTTP 429). El lote se pausó; reanudalo más tarde.")
+                elif response.status_code in (500, 502, 503, 504) and attempt < 2:
+                    _REQUEST_GATE.defer(2 ** attempt)
+                else:
+                    break
         if response.status_code == 404 and allow_not_found:
             return {"status": 404}
         response.raise_for_status()
@@ -71,9 +130,9 @@ def fetch_entities() -> dict[int, str]:
         raise BCRAError("El catálogo de entidades del BCRA tiene un formato inesperado.") from exc
 
 
-def fetch_endpoint(kind: str, cuit: str) -> dict:
+def fetch_endpoint(kind: str, cuit: str, stop_event=None) -> dict:
     cuit = normalize_cuit(cuit)
-    payload = _get_payload(f"{BASE_URL}/{ENDPOINTS[kind]}{cuit}", allow_not_found=True)
+    payload = _get_payload(f"{BASE_URL}/{ENDPOINTS[kind]}{cuit}", allow_not_found=True, stop_event=stop_event)
     if payload.get("status") == 404:
         return {}
     if payload.get("status") != 200 or not isinstance(payload.get("results"), dict):

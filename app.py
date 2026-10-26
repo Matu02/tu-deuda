@@ -9,6 +9,7 @@ import streamlit as st
 
 from bcra import BCRAError, checks_frame, debt_frame, fetch_entities, fetch_report, normalize_cuit
 from charts import checks_chart, debt_chart, situation_chart
+from formatting import money
 
 st.set_page_config(page_title="Tu Deuda · BCRA", page_icon="🏦", layout="wide")
 st.markdown("""<style>
@@ -40,10 +41,6 @@ class PartialReport(Exception):
         self.report = report
 
 
-def money(value):
-    return "$ " + f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
-
-
 def csv_download(frame, name, label):
     st.download_button(label, frame.to_csv(index=False).encode("utf-8-sig"),
                        file_name=name, mime="text/csv")
@@ -52,6 +49,11 @@ def csv_download(frame, name, label):
 st.markdown('<div class="eyebrow">INFORMACIÓN CREDITICIA · ARGENTINA</div>', unsafe_allow_html=True)
 st.title("Tu Deuda")
 st.write("Consultá la deuda financiera y los cheques rechazados de una empresa por CUIT.")
+mode = st.radio("Tipo de consulta", ["Consulta individual", "Cheques por archivo"], horizontal=True)
+if mode == "Cheques por archivo":
+    from bulk_ui import render_bulk
+    render_bulk(load_entities)
+    st.stop()
 
 with st.form("consulta"):
     field, action = st.columns([4, 1], vertical_alignment="bottom")
