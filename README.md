@@ -1,0 +1,53 @@
+# Tu Deuda
+
+App web en Streamlit para consultar la Central de Deudores del BCRA por CUIT.
+
+- Deuda actual y evolución mensual con barras apiladas por entidad financiera.
+- Cheques rechazados: gráfico de torta por causal y tabla con todos los campos de cada cheque.
+- Descargas CSV y respuesta original JSON; manejo independiente de errores por consulta.
+- Validación del dígito verificador, consultas paralelas con timeout y reintentos, caché de 15 minutos.
+
+## Ejecutar
+
+Requiere Python 3.12 y acceso HTTPS a `api.bcra.gob.ar`. No necesita claves ni base de datos.
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m streamlit run app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Ingresar un CUIT y pulsar **Consultar BCRA**. Ejemplo: `30532847547` (BAZAR AVENIDA S. A.).
+
+## Pruebas
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+Las pruebas usan respuestas simuladas; no dependen de la disponibilidad del BCRA.
+
+## Fuente y unidades
+
+Se consumen los tres endpoints documentados en https://deudores.bcra.apidocs.ar/:
+
+```text
+https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas/{Identificacion}
+https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas/Historicas/{Identificacion}
+https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas/ChequesRechazados/{Identificacion}
+```
+
+Las financiaciones se informan en miles de pesos: la app conserva `monto` y agrega
+`monto_ars = monto * 1000` para graficar y sumar en ARS. Los montos de los cheques
+ya están en pesos y no se multiplican. Un período presente tanto en la consulta
+actual como en la histórica se cuenta una sola vez, priorizando la consulta actual.
+Los meses ausentes no se rellenan con ceros. La torta incluye cheques pagados y
+no pagados; el monto total rechazado no es necesariamente deuda pendiente.
+
+La tabla conserva todos los campos del detalle del cheque, sumando `causal` y el
+código `entidad` de los niveles superiores de la respuesta. La respuesta JSON
+completa también está disponible para descarga. Los errores no se guardan en caché.
+
+No se incluyen datos empresariales reales en el repositorio. Las consultas sólo
+se realizan al enviar el formulario. La aplicación no tiene persistencia propia;
+las respuestas se mantienen temporalmente en la memoria del servidor y la sesión.
