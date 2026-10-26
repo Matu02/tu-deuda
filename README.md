@@ -44,11 +44,11 @@ Los pagos posteriores no excluyen un cheque rechazado en la fecha seleccionada.
 
 ### Ritmo, errores y reanudación
 
-- El lote usa un trabajador secuencial en segundo plano y una pausa configurable
-  de 1, 2 o 5 segundos, por defecto 2. Para 3.000 CUIT esa pausa suma unos 100 minutos,
-  más el tiempo de las respuestas, reintentos y una consulta al catálogo.
+- El lote usa hasta tres trabajadores en segundo plano, con un límite compartido
+  de **3 solicitudes por segundo**. Para 3.000 CUIT, el tiempo teórico es de unos
+  17 minutos, sujeto al tiempo de respuesta, reintentos y una consulta al catálogo.
 - Todas las solicitudes de este proceso, incluidos los reintentos y las consultas
-  individuales, comparten un mínimo de 1 segundo entre inicios. No es una cuota
+  individuales, comparten un mínimo de 1/3 de segundo entre inicios. No es una cuota
   oficial del BCRA ni se coordina entre distintas réplicas o servidores.
 - HTTP 429 respeta `Retry-After` (segundos o fecha HTTP), con espera compartida;
   los HTTP 5xx reciben hasta dos reintentos con espera creciente. Si persiste un
@@ -57,7 +57,7 @@ Los pagos posteriores no excluyen un cheque rechazado en la fecha seleccionada.
   60 segundos pausa el lote sin bloquear la interfaz ni insistir contra el servicio.
   Las demás sesiones de este proceso respetan esa misma espera. Un 503 no permite
   determinar por sí solo si hubo limitación de tráfico o indisponibilidad temporal.
-- **Pausar lote** conserva la solicitud en curso y permite continuar. Los errores,
+- **Pausar lote** conserva los resultados de las consultas en curso y permite continuar. Los errores,
   fechas no interpretables y pendientes se distinguen de empresas sin cheques.
   Los totales parciales se identifican explícitamente.
 - **Guardar avance para continuar luego (JSON)** descarga los resultados y los CUIT

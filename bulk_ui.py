@@ -12,6 +12,7 @@ from bcra_errors import BCRAError
 from bulk import BatchJob, extract_cuits, read_table, report_frames, restore_job
 from charts import checks_chart, companies_chart
 from formatting import money
+from rate_policy import REQUESTS_PER_SECOND
 
 
 def _catalog(load_entities):
@@ -34,8 +35,7 @@ def render_bulk(load_entities):
     today = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).date()
     target = st.date_input("Fecha de rechazo", value=today, max_value=today)
     uploaded = st.file_uploader("Insertar Excel/CSV con CUITs", type=["xlsx", "csv"], key="bulk_upload", help="Excel .xlsx o CSV de hasta 20 MB. Podés elegir la columna y la primera fila con CUIT.")
-    interval = st.selectbox("Pausa entre consultas", options=[2, 5, 1], format_func=lambda s: f"{s} segundo{'s' if s != 1 else ''}")
-    st.caption("Una consulta de cheques por CUIT único, más el catálogo de entidades. Sin consultas de deudores. Los reintentos y demoras del BCRA pueden extender el tiempo. El ritmo se comparte entre sesiones de este servidor (mínimo 1 segundo entre solicitudes), pero no entre servidores distintos.")
+    st.caption("Hasta 3 solicitudes por segundo y 3 consultas simultáneas por lote. Una consulta de cheques por CUIT único, más el catálogo de entidades. El ritmo se comparte entre sesiones de este servidor e incluye los reintentos; no se coordina entre servidores distintos. Las esperas indicadas por el BCRA se respetan automáticamente.")
     if uploaded is not None:
         try:
             content = uploaded.getvalue()
@@ -57,7 +57,7 @@ def render_bulk(load_entities):
             column = b.selectbox("Columna de CUIT (A = primera columna)", options=list(range(len(table.columns))), format_func=lambda i: f"Columna {i + 1}" + (" (A)" if i == 0 else ""))
             cuits, invalid, duplicates, blanks = extract_cuits(table, int(row), column)
             st.write(f"**{len(cuits):,} CUIT válidos únicos** · {duplicates:,} duplicados · {len(invalid):,} filas inválidas · {blanks:,} vacías".replace(",", "."))
-            st.caption(f"Tiempo mínimo orientativo para este lote: {len(cuits) * interval / 60:.0f} minutos, más respuestas y reintentos. Para 3.000 CUIT, la pausa de 2 segundos suma aproximadamente 100 minutos.")
+            st.caption(f"Tiempo orientativo a 3 solicitudes por segundo: {len(cuits) / REQUESTS_PER_SECOND / 60:.0f} minutos. Para 3.000 CUIT, unos 17 minutos; puede demorar más según las respuestas, reintentos y límites del BCRA.")
             if not invalid.empty:
                 with st.expander("Filas que no se consultarán"):
                     st.dataframe(invalid, hide_index=True, width="stretch")
@@ -65,7 +65,7 @@ def render_bulk(load_entities):
             if st.button("Iniciar nuevo lote", type="primary", disabled=not cuits or _active()):
                 with st.spinner("Preparando catálogo de entidades…"):
                     _catalog(load_entities)
-                job = BatchJob(cuits, target, interval)
+                job = BatchJob(cuits, target)
                 st.session_state["bulk_job"] = job
                 job.start()
         except (ValueError, OSError, ImportError, pd.errors.ParserError) as exc:
@@ -78,7 +78,6 @@ def render_bulk(load_entities):
         if st.button("Cargar avance", disabled=checkpoint is None or _active()):
             try:
                 job = restore_job(checkpoint.getvalue())
-                job.interval = float(interval)
                 st.session_state["bulk_job"] = job
                 _catalog(load_entities)
                 st.success(f"Avance cargado para el {job.target_date}. Presioná Continuar / reintentar pendientes.")
@@ -107,7 +106,7 @@ def render_progress():
     controls = st.columns(2)
     if controls[0].button("Pausar lote", disabled=not snapshot["running"]):
         job.pause()
-        st.info("Se pausará al terminar la solicitud en curso; no se pierden las consultas completadas.")
+        st.info("Se pausará al terminar las consultas en curso; no se pierden las consultas completadas.")
     if controls[1].button("Continuar / reintentar pendientes", disabled=snapshot["running"] or ok == total):
         job.start()
         st.rerun()

@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 
 from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit
+from rate_policy import REQUESTS_PER_SECOND
 
 BASE_URL = "https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas"
 ENTITIES_URL = "https://api.bcra.gob.ar/cheques/v1.0/entidades"
@@ -21,7 +22,7 @@ ENDPOINTS = {"actual": "", "historicas": "Historicas/", "cheques": "ChequesRecha
 class RequestGate:
     """Ritmo compartido por todos los usuarios e hilos de este proceso."""
 
-    def __init__(self, interval=1.0):
+    def __init__(self, interval=1 / REQUESTS_PER_SECOND):
         self.interval = interval
         self.lock = threading.Lock()
         self.next_request = 0.0

@@ -2,6 +2,7 @@ from datetime import date
 from io import BytesIO
 import json
 import threading
+import time
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -69,9 +70,11 @@ def test_daily_filter_keeps_full_fields_and_flags_unknown_dates():
 
 
 def run_job(job):
-    job.stop_event.wait = Mock(return_value=False)
     job.start()
-    job.thread.join(timeout=5)
+    job.thread.join(timeout=20)
+    if job.thread.is_alive():
+        job.pause()
+        job.thread.join(timeout=5)
     assert not job.thread.is_alive()
 
 
@@ -146,6 +149,59 @@ def test_request_gate_waits_and_honors_shared_cooldown():
     event.set()
     with pytest.raises(BCRACancelled):
         gate.wait(event)
+
+
+def test_parallel_batch_shares_three_per_second_limit_at_http_layer():
+    gate = RequestGate()
+    starts = []
+    active = 0
+    maximum = 0
+    lock = threading.Lock()
+
+    def get(*args, **kwargs):
+        nonlocal active, maximum
+        with lock:
+            starts.append(time.monotonic())
+            active += 1
+            maximum = max(maximum, active)
+        try:
+            time.sleep(0.8)
+            response = Mock(status_code=200)
+            response.json.return_value = {"status": 200, "results": {"causales": [], "denominacion": "Empresa sintética"}}
+            return response
+        finally:
+            with lock:
+                active -= 1
+
+    job = BatchJob([synthetic_cuit(i) for i in range(6)], "2026-01-12")
+    with patch("bcra._REQUEST_GATE", gate), patch("bcra.requests.Session") as session:
+        session.return_value.__enter__.return_value.get.side_effect = get
+        run_job(job)
+    assert len(starts) == 6
+    assert maximum == 3
+    assert all(b - a >= 1 / 3 - 0.01 for a, b in zip(starts, starts[1:]))
+    assert all(record["estado"] == "ok" for record in job.snapshot()["resultados"].values())
+
+
+def test_server_pause_saves_other_inflight_results_without_scheduling_more():
+    barrier = threading.Barrier(3)
+    cuits = [synthetic_cuit(i) for i in range(12)]
+    job = BatchJob(cuits, "2026-01-12")
+
+    def query(kind, cuit, **kwargs):
+        barrier.wait(timeout=5)
+        if cuit == cuits[0]:
+            raise BCRACooldown("Esperar antes de continuar")
+        time.sleep(0.05)
+        return response()
+
+    with patch("bulk.fetch_endpoint", side_effect=query) as fetch:
+        run_job(job)
+        assert fetch.call_count == 3
+    records = job.snapshot()["resultados"]
+    assert len(records) == 3
+    assert records[cuits[0]]["estado"] == "error"
+    assert records[cuits[1]]["estado"] == records[cuits[2]]["estado"] == "ok"
 
 
 def test_http429_respects_retry_after_before_retrying():

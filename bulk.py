@@ -1,6 +1,8 @@
 """Importación y trabajo por lotes. Nunca consulta deudas ni historial."""
 
 from copy import deepcopy
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import csv
 from datetime import date, datetime, timezone
 from io import BytesIO
@@ -13,6 +15,7 @@ import pandas as pd
 
 from bcra import checks_frame, fetch_endpoint, normalize_cuit
 from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit
+from rate_policy import MAX_BATCH_WORKERS
 
 
 def read_table(content: bytes, filename: str, sheet=0) -> pd.DataFrame:
@@ -85,12 +88,11 @@ def daily_result(result: dict, target_date: str) -> dict:
 
 
 class BatchJob:
-    """Un hilo secuencial por lote, sin llamadas a Streamlit desde el trabajador."""
+    """Hasta tres consultas en vuelo, sin llamadas a Streamlit desde trabajadores."""
 
-    def __init__(self, cuits, target_date, interval=2.0, records=None):
+    def __init__(self, cuits, target_date, records=None):
         self.cuits = list(dict.fromkeys(normalize_cuit(c) for c in cuits))
         self.target_date = date.fromisoformat(str(target_date)).isoformat()
-        self.interval = max(1.0, float(interval))
         self.records = deepcopy(records or {})
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -113,37 +115,43 @@ class BatchJob:
 
     def _run(self):
         consecutive_errors = 0
-        try:
-            for cuit in self.cuits:
+        pause_reason = None
+        with self.lock:
+            pending = deque(c for c in self.cuits if self.records.get(c, {}).get("estado") != "ok")
+
+        def worker():
+            nonlocal consecutive_errors, pause_reason
+            while True:
                 with self.lock:
-                    if self.records.get(cuit, {}).get("estado") == "ok":
-                        continue
-                if self.stop_event.is_set():
-                    break
+                    if self.stop_event.is_set() or not pending:
+                        return
+                    cuit = pending.popleft()
                 limited = False
                 try:
                     result = fetch_endpoint("cheques", cuit, stop_event=self.stop_event)
                     record = daily_result(result, self.target_date)
-                    consecutive_errors = 0
                 except BCRACancelled:
-                    break
+                    return
                 except BCRAError as exc:
                     record = {"estado": "error", "error": str(exc), "cheques": [], "razon_social": ""}
-                    consecutive_errors += 1
                     limited = isinstance(exc, (BCRARateLimit, BCRACooldown))
                 except Exception:
                     record = {"estado": "error", "error": "No se pudo interpretar la respuesta de cheques.", "cheques": [], "razon_social": ""}
-                    consecutive_errors += 1
                 with self.lock:
                     self.records[cuit] = record
+                    consecutive_errors = consecutive_errors + 1 if record["estado"] == "error" else 0
                     if limited or consecutive_errors >= 5:
-                        self.message = record["error"] if limited else "Lote pausado tras 5 errores consecutivos. Revisá el servicio y reanudá más tarde."
-                if limited or consecutive_errors >= 5:
-                    return
-                if self.stop_event.wait(self.interval):
-                    break
+                        pause_reason = record["error"] if limited else "Lote pausado tras 5 errores consecutivos. Revisá el servicio y reanudá más tarde."
+                        self.message = pause_reason
+                        self.stop_event.set()
+
+        try:
+            with ThreadPoolExecutor(max_workers=MAX_BATCH_WORKERS) as pool:
+                futures = [pool.submit(worker) for _ in range(MAX_BATCH_WORKERS)]
+                for future in futures:
+                    future.result()
             with self.lock:
-                self.message = "Lote pausado. Podés continuarlo." if self.stop_event.is_set() else "Consultas finalizadas. Revisá los errores o resultados parciales, si los hay."
+                self.message = pause_reason or ("Lote pausado. Podés continuarlo." if self.stop_event.is_set() else "Consultas finalizadas. Revisá los errores o resultados parciales, si los hay.")
         finally:
             with self.lock:
                 self.running = False
