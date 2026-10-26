@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from bcra import checks_frame, debt_frame, fetch_report, normalize_cuit
-from charts import checks_chart, debt_chart
+from charts import checks_chart, debt_chart, situation_chart
 
 st.set_page_config(page_title="Tu Deuda · BCRA", page_icon="🏦", layout="wide")
 st.markdown("""<style>
@@ -111,6 +111,20 @@ if not debts.empty:
         st.info("El historial no está disponible; se muestra únicamente el período de la consulta actual.")
     st.plotly_chart(debt_chart(debts), width="stretch")
     st.caption("El BCRA informa las financiaciones en miles de pesos; aquí se multiplican por 1.000. Los meses sin registros no se interpretan como deuda cero.")
+    st.subheader("Evolución de la deuda por situación")
+    st.caption("Deuda total de todas las entidades, agrupada por mes y situación crediticia. Importes en pesos argentinos (ARS).")
+    st.plotly_chart(situation_chart(debts), width="stretch")
+    with st.expander("Qué significa cada situación"):
+        st.markdown("""
+| Situación | Cartera comercial | Cartera para consumo o vivienda | Referencias |
+| --- | --- | --- | --- |
+| 1 | En situación normal | Situación normal | Sección 6, punto 6.5.1 / Sección 7, punto 7.2.1 |
+| 2 | Con seguimiento especial | Riesgo bajo | Sección 6, punto 6.5.2 / Sección 7, punto 7.2.2 |
+| 3 | Con problemas | Riesgo medio | Sección 6, punto 6.5.3 / Sección 7, punto 7.2.3 |
+| 4 | Con alto riesgo de insolvencia | Riesgo alto | Sección 6, punto 6.5.4 / Sección 7, punto 7.2.4 |
+| 5 | Irrecuperable | Irrecuperable | Sección 6, punto 6.5.5 / Sección 7, punto 7.2.5 |
+""")
+        st.caption("Se utiliza la situación informada por el BCRA para cada registro, sin inferir el tipo de cartera. Los códigos fuera de 1 a 5 o no informados se agrupan como Sin clasificación y conservan su monto.")
     with st.expander("Ver detalle de las deudas por mes y entidad"):
         st.caption("monto: miles de ARS originales del BCRA · monto_ars: pesos argentinos.")
         st.dataframe(debts, hide_index=True, width="stretch")

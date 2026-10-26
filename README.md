@@ -3,6 +3,7 @@
 App web en Streamlit para consultar la Central de Deudores del BCRA por CUIT.
 
 - Deuda actual y evolución mensual con barras apiladas por entidad financiera.
+- Gráfico mensual adicional por situación crediticia (1 a 5), sumando todas las entidades, con descripciones para ambas carteras. Los códigos no clasificados conservan sus montos en una categoría separada.
 - Cheques rechazados: gráfico de torta por causal y tabla con todos los campos de cada cheque.
 - Descargas CSV y respuesta original JSON; manejo independiente de errores por consulta.
 - Validación del dígito verificador, consultas paralelas con timeout y reintentos, caché de 15 minutos.

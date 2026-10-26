@@ -2,9 +2,40 @@ from unittest.mock import Mock, patch
 
 import pytest
 import requests
+import pandas as pd
 
 from bcra import BCRAError, checks_frame, debt_frame, fetch_endpoint, fetch_report, normalize_cuit
-from charts import checks_chart, debt_chart
+from charts import checks_chart, debt_chart, situation_chart, SITUATIONS
+
+
+def test_situation_chart_aggregates_entities_per_month_and_preserves_totals():
+    frame = pd.DataFrame([
+        {"periodo": "202602", "entidad": "Banco A", "situacion": 1, "monto_ars": 1000},
+        {"periodo": "202602", "entidad": "Banco B", "situacion": 1, "monto_ars": 2000},
+        {"periodo": "202602", "entidad": "Banco C", "situacion": 3, "monto_ars": 500},
+        {"periodo": "202601", "entidad": "Banco A", "situacion": 2, "monto_ars": 700},
+        {"periodo": "202601", "entidad": "Banco B", "situacion": 4, "monto_ars": 800},
+        {"periodo": "202601", "entidad": "Banco C", "situacion": 5, "monto_ars": 900},
+    ])
+    fig = situation_chart(frame)
+    assert fig.layout.barmode == "stack"
+    assert list(fig.layout.xaxis.categoryarray) == ["2026-01", "2026-02"]
+    assert {t.name for t in fig.data} == set(SITUATIONS.values())
+    normal = next(t for t in fig.data if t.name == SITUATIONS[1])
+    assert list(normal.y) == [3000]
+    assert sum(sum(t.y) for t in fig.data) == frame.monto_ars.sum()
+
+
+@pytest.mark.parametrize("codes", [[0, None, 6], ["1", "2", "3"], None])
+def test_situation_chart_preserves_missing_and_unknown_classifications(codes):
+    frame = pd.DataFrame({"periodo": ["202601"] * 3, "monto_ars": [10, 20, 30]})
+    if codes is not None:
+        frame["situacion"] = codes
+    fig = situation_chart(frame)
+    assert sum(sum(t.y) for t in fig.data) == 60
+    if codes is None or codes[0] == 0:
+        assert len(fig.data) == 1
+        assert fig.data[0].name.startswith("Sin clasificación")
 
 
 # CUIT sintético, usado sólo con respuestas simuladas.

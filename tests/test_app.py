@@ -7,15 +7,15 @@ def report_fixture():
     return {
         "cuit": "30000000007", "consultado": "2026-10-25T23:00:00+00:00", "errores": {},
         "actual": {"denominacion": "EMPRESA DE PRUEBA", "periodos": [
-            {"periodo": "202608", "entidades": [{"entidad": "Banco A", "monto": 10}]}]},
+            {"periodo": "202608", "entidades": [{"entidad": "Banco A", "monto": 10, "situacion": 1}]}]},
         "historicas": {"periodos": [
-            {"periodo": "202607", "entidades": [{"entidad": "Banco B", "monto": 5}]}]},
+            {"periodo": "202607", "entidades": [{"entidad": "Banco B", "monto": 5, "situacion": 2}]}]},
         "cheques": {"causales": [{"causal": "SIN FONDOS", "entidades": [
             {"entidad": 1, "detalle": [{"nroCheque": 123, "monto": 500.25, "fechaPago": None}]}]}]},
     }
 
 
-def test_submit_renders_both_charts_and_full_table():
+def test_submit_renders_three_charts_and_full_table():
     app = AppTest.from_file("app.py").run()
     assert not app.exception
     assert app.text_input[0].value == ""
@@ -23,7 +23,7 @@ def test_submit_renders_both_charts_and_full_table():
         app.text_input[0].set_value("30000000007")
         app.button[0].click().run()
     assert not app.exception
-    assert len(app.get("plotly_chart")) == 2
+    assert len(app.get("plotly_chart")) == 3
     assert len(app.dataframe) == 2
     assert "fechaPago" in app.dataframe[1].value.columns
     assert app.metric[0].value == "$ 10.000,00"
@@ -68,7 +68,7 @@ def test_partial_submission_can_be_retried():
         app.button[0].click().run()
         assert fetch.call_count == 2
     assert not app.exception
-    assert len(app.get("plotly_chart")) == 2
+    assert len(app.get("plotly_chart")) == 3
 
 
 def test_no_records_message():
