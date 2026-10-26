@@ -1,7 +1,7 @@
 """Cliente público de la Central de Deudores y normalización de sus respuestas."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import re
 import math
 import threading
@@ -11,7 +11,7 @@ from email.utils import parsedate_to_datetime
 import pandas as pd
 import requests
 
-from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit
+from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit, BCRAUnavailable
 from rate_policy import REQUESTS_PER_SECOND
 
 BASE_URL = "https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas"
@@ -26,16 +26,26 @@ class RequestGate:
         self.interval = interval
         self.lock = threading.Lock()
         self.next_request = 0.0
+        self.unavailable_until = None
 
     def defer(self, seconds):
         with self.lock:
             self.next_request = max(self.next_request, time.monotonic() + seconds)
+
+    def unavailable(self, retry_at):
+        with self.lock:
+            if retry_at and (not self.unavailable_until or retry_at > self.unavailable_until):
+                self.unavailable_until = retry_at
 
     def wait(self, stop_event=None):
         while True:
             if stop_event is not None and stop_event.is_set():
                 raise BCRACancelled("Consulta pausada.")
             with self.lock:
+                if self.unavailable_until:
+                    if datetime.fromisoformat(self.unavailable_until) > datetime.now(timezone.utc):
+                        raise BCRAUnavailable(self.unavailable_until)
+                    self.unavailable_until = None
                 delay = self.next_request - time.monotonic()
                 if delay <= 0:
                     self.next_request = time.monotonic() + self.interval
@@ -51,16 +61,16 @@ class RequestGate:
 _REQUEST_GATE = RequestGate()
 
 
-def retry_after_seconds(value):
+def retry_after_seconds(value, default=3):
     """Retry-After admite segundos o una fecha HTTP."""
     try:
         seconds = float(value)
-        return max(0, seconds) if pd.notna(seconds) and seconds != float("inf") else 60
+        return max(0, seconds) if pd.notna(seconds) and seconds != float("inf") else default
     except (ValueError, TypeError):
         try:
             return max(0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
         except (ValueError, TypeError, OverflowError):
-            return 60
+            return default
 
 
 def normalize_cuit(value: str) -> str:
@@ -82,15 +92,17 @@ def _get_payload(url: str, allow_not_found: bool = False, stop_event=None) -> di
                 _REQUEST_GATE.wait(stop_event)
                 response = session.get(url, timeout=(8, 30))
                 if response.status_code == 429:
-                    _REQUEST_GATE.defer(max(2 ** attempt, retry_after_seconds(response.headers.get("Retry-After"))))
+                    _REQUEST_GATE.defer(max(3, retry_after_seconds(response.headers.get("Retry-After"))))
                     if attempt == 2:
                         raise BCRARateLimit("El BCRA limitó las solicitudes (HTTP 429). El lote se pausó; reanudalo más tarde.")
-                elif response.status_code == 503 and response.headers.get("Retry-After"):
-                    seconds = retry_after_seconds(response.headers["Retry-After"])
-                    _REQUEST_GATE.defer(max(2 ** attempt, seconds))
-                    if seconds > 60 or attempt == 2:
-                        raise BCRACooldown(f"El BCRA devolvió HTTP 503 y pidió esperar {math.ceil(seconds)} segundos. El lote se pausó; reanudalo más tarde.")
-                elif response.status_code in (500, 502, 503, 504) and attempt < 2:
+                elif response.status_code == 503:
+                    seconds = retry_after_seconds(response.headers.get("Retry-After"), default=None)
+                    retry_at = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat() if seconds is not None else None
+                    _REQUEST_GATE.unavailable(retry_at)
+                    if stop_event is not None:
+                        stop_event.set()
+                    raise BCRAUnavailable(retry_at)
+                elif response.status_code in (500, 502, 504) and attempt < 2:
                     _REQUEST_GATE.defer(2 ** attempt)
                 else:
                     break

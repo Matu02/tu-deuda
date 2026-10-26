@@ -63,3 +63,33 @@ def test_completed_no_matches_shows_empty_daily_report():
     assert not app.exception
     assert any("No se encontraron" in i.value for i in app.info)
     assert not app.get("plotly_chart")
+
+
+def test_catalog_503_does_not_start_company_queries():
+    import streamlit as st
+    from bcra_errors import BCRAUnavailable
+    st.cache_data.clear()
+    uploaded = Mock()
+    uploaded.name = "clientes.csv"
+    uploaded.getvalue.return_value = b"CUIT\n30000000007\n"
+    def upload(label, **kwargs):
+        return None if "avance" in label else uploaded
+    with patch("streamlit.file_uploader", side_effect=upload), patch("bcra.fetch_entities", side_effect=BCRAUnavailable()), patch("bulk.fetch_endpoint") as fetch:
+        app = AppTest.from_file("app.py").run()
+        next(b for b in app.button if b.label == "Iniciar nuevo lote").click().run()
+        assert not app.exception
+        assert any("Caída la API BCRA" in e.value for e in app.error)
+        fetch.assert_not_called()
+    st.cache_data.clear()
+
+
+def test_503_deadline_disables_resume_button():
+    from datetime import datetime, timezone, timedelta
+    job = BatchJob(["30000000007"], "2026-01-12")
+    job.retry_at = (datetime.now(timezone.utc) + timedelta(seconds=90)).isoformat()
+    app = AppTest.from_file("app.py").run()
+    app.session_state["bulk_job"] = job
+    app.run()
+    assert not app.exception
+    assert next(b for b in app.button if b.label == "Continuar / reintentar pendientes").disabled
+    assert any("Caída la API BCRA" in e.value for e in app.error)

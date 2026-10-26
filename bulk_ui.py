@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from bcra_errors import BCRAError
+from bcra_errors import BCRAError, BCRAUnavailable
 from bulk import BatchJob, extract_cuits, read_table, report_frames, restore_job
 from charts import checks_chart, companies_chart
 from formatting import money
@@ -19,9 +19,18 @@ def _catalog(load_entities):
     try:
         st.session_state["bulk_catalog"] = load_entities()
         st.session_state["bulk_catalog_error"] = False
+        return True
+    except BCRAUnavailable as exc:
+        st.error(str(exc))
+        job = st.session_state.get("bulk_job")
+        if job is not None:
+            job.retry_at = exc.retry_at
+            job.message = str(exc)
+        return False
     except BCRAError:
         st.session_state["bulk_catalog"] = {}
         st.session_state["bulk_catalog_error"] = True
+        return True
 
 
 def _active():
@@ -64,7 +73,8 @@ def render_bulk(load_entities):
                     st.download_button("Descargar filas inválidas", invalid.to_csv(index=False).encode("utf-8-sig"), "cuits_invalidos.csv", "text/csv")
             if st.button("Iniciar nuevo lote", type="primary", disabled=not cuits or _active()):
                 with st.spinner("Preparando catálogo de entidades…"):
-                    _catalog(load_entities)
+                    if not _catalog(load_entities):
+                        return
                 job = BatchJob(cuits, target)
                 st.session_state["bulk_job"] = job
                 job.start()
@@ -79,7 +89,8 @@ def render_bulk(load_entities):
             try:
                 job = restore_job(checkpoint.getvalue())
                 st.session_state["bulk_job"] = job
-                _catalog(load_entities)
+                if job.can_resume() and not _catalog(load_entities):
+                    return
                 st.success(f"Avance cargado para el {job.target_date}. Presioná Continuar / reintentar pendientes.")
             except ValueError as exc:
                 st.error(str(exc))
@@ -103,11 +114,13 @@ def render_progress():
     st.caption("Este reporte conserva los CUIT y la fecha con los que se inició. Cambiar los controles de carga no modifica el lote actual.")
     st.progress(attempted / total if total else 0, text=f"{attempted} de {total} CUIT procesados · {ok} completos · {problems} con errores o datos parciales · {pending} pendientes")
     st.caption(snapshot["mensaje"])
+    if not job.can_resume():
+        st.error(str(BCRAUnavailable(job.retry_at)))
     controls = st.columns(2)
     if controls[0].button("Pausar lote", disabled=not snapshot["running"]):
         job.pause()
         st.info("Se pausará al terminar las consultas en curso; no se pierden las consultas completadas.")
-    if controls[1].button("Continuar / reintentar pendientes", disabled=snapshot["running"] or ok == total):
+    if controls[1].button("Continuar / reintentar pendientes", disabled=snapshot["running"] or ok == total or not job.can_resume()):
         job.start()
         st.rerun()
     if snapshot["running"] or pending or problems:

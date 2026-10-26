@@ -14,7 +14,7 @@ import threading
 import pandas as pd
 
 from bcra import checks_frame, fetch_endpoint, normalize_cuit
-from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit
+from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit, BCRAUnavailable
 from rate_policy import MAX_BATCH_WORKERS
 
 
@@ -99,12 +99,17 @@ class BatchJob:
         self.running = False
         self.message = "Lote preparado."
         self.thread = None
+        self.retry_at = None
+
+    def can_resume(self):
+        return not self.retry_at or datetime.fromisoformat(self.retry_at) <= datetime.now(timezone.utc)
 
     def start(self):
         with self.lock:
-            if self.running:
+            if self.running or not self.can_resume():
                 return
             self.running = True
+            self.retry_at = None
             self.stop_event.clear()
             self.message = "Consultando cheques rechazados…"
             self.thread = threading.Thread(target=self._run, daemon=True)
@@ -135,6 +140,10 @@ class BatchJob:
                 except BCRAError as exc:
                     record = {"estado": "error", "error": str(exc), "cheques": [], "razon_social": ""}
                     limited = isinstance(exc, (BCRARateLimit, BCRACooldown))
+                    if isinstance(exc, BCRAUnavailable):
+                        with self.lock:
+                            if exc.retry_at and (not self.retry_at or exc.retry_at > self.retry_at):
+                                self.retry_at = exc.retry_at
                 except Exception:
                     record = {"estado": "error", "error": "No se pudo interpretar la respuesta de cheques.", "cheques": [], "razon_social": ""}
                 with self.lock:
@@ -159,7 +168,7 @@ class BatchJob:
     def snapshot(self):
         with self.lock:
             return {"version": 1, "fecha": self.target_date, "cuits": self.cuits.copy(),
-                    "resultados": deepcopy(self.records), "running": self.running, "mensaje": self.message}
+                    "resultados": deepcopy(self.records), "running": self.running, "mensaje": self.message, "reintentar_desde": self.retry_at}
 
 
 def restore_job(content: bytes) -> BatchJob:
@@ -185,7 +194,15 @@ def restore_job(content: bytes) -> BatchJob:
                 amount = check["monto"]
                 if str(check["fechaRechazo"])[:10] != target or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
                     raise ValueError("Detalle de cheques no válido.")
-        return BatchJob(cuits, target, records=data["resultados"])
+        job = BatchJob(cuits, target, records=data["resultados"])
+        retry_at = data.get("reintentar_desde")
+        if retry_at is not None:
+            parsed = datetime.fromisoformat(retry_at)
+            if parsed.tzinfo is None:
+                raise ValueError("El plazo debe incluir zona horaria.")
+            job.retry_at = parsed.astimezone(timezone.utc).isoformat()
+            job.message = str(BCRAUnavailable(job.retry_at))
+        return job
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise ValueError("El archivo de avance no tiene un formato válido de Tu Deuda.") from exc
 

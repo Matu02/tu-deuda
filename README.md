@@ -50,13 +50,18 @@ Los pagos posteriores no excluyen un cheque rechazado en la fecha seleccionada.
 - Todas las solicitudes de este proceso, incluidos los reintentos y las consultas
   individuales, comparten un mínimo de 1/3 de segundo entre inicios. No es una cuota
   oficial del BCRA ni se coordina entre distintas réplicas o servidores.
-- HTTP 429 respeta `Retry-After` (segundos o fecha HTTP), con espera compartida;
-  los HTTP 5xx reciben hasta dos reintentos con espera creciente. Si persiste un
-  429, o hay cinco empresas con errores consecutivos, el lote se pausa.
-- También se respeta `Retry-After` en HTTP 503. Una espera indicada superior a
-  60 segundos pausa el lote sin bloquear la interfaz ni insistir contra el servicio.
-  Las demás sesiones de este proceso respetan esa misma espera. Un 503 no permite
-  determinar por sí solo si hubo limitación de tráfico o indisponibilidad temporal.
+- HTTP 429 sin `Retry-After` válido espera **3 segundos**. Con cabecera válida,
+  respeta esa espera con mínimo de 3 segundos. Hasta tres intentos totales por CUIT,
+  con espera compartida entre trabajadores. Si persiste el límite, el lote se pausa.
+- Todo HTTP 503 detiene el lote inmediatamente, incluso al consultar el catálogo,
+  sin reintentos automáticos. Muestra «Caída la API BCRA»: con el plazo indicado
+  por `Retry-After`, o «Reintentá más tarde» si no hay un plazo válido. Las consultas
+  ya enviadas pueden finalizar y sus resultados se conservan.
+- El plazo de un 503 se conserva como `reintentar_desde` en los nuevos archivos de
+  avance; se impide continuar antes de que venza. Los JSON anteriores siguen siendo
+  válidos. Sin plazo indicado, la reanudación es manual, sin espera inventada.
+- Los errores HTTP 500, 502 y 504 mantienen sus reintentos; cinco empresas con
+  errores consecutivos pausan el lote. Los errores nunca se cuentan como cero cheques.
 - **Pausar lote** conserva los resultados de las consultas en curso y permite continuar. Los errores,
   fechas no interpretables y pendientes se distinguen de empresas sin cheques.
   Los totales parciales se identifican explícitamente.
