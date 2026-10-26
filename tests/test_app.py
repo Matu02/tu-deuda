@@ -1,6 +1,16 @@
 from unittest.mock import patch
 
+import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
+from bcra import BCRAError
+
+
+@pytest.fixture(autouse=True)
+def mock_entities():
+    st.cache_data.clear()
+    with patch("bcra.fetch_entities", return_value={11: "Banco de prueba"}):
+        yield
 
 
 def report_fixture():
@@ -26,6 +36,7 @@ def test_submit_renders_three_charts_and_full_table():
     assert len(app.get("plotly_chart")) == 3
     assert len(app.dataframe) == 2
     assert "fechaPago" in app.dataframe[1].value.columns
+    assert app.dataframe[1].value.loc[0, "nombreEntidad"] == "Entidad no identificada (código 1)"
     assert app.metric[0].value == "$ 10.000,00"
 
 
@@ -80,3 +91,19 @@ def test_no_records_message():
     assert not app.exception
     assert "no devolvió registros" in app.info[0].value
     assert not app.get("plotly_chart")
+
+
+def test_catalog_failure_keeps_cheques_and_can_retry():
+    app = AppTest.from_file("app.py").run()
+    data = report_fixture()
+    data["cheques"]["causales"][0]["entidades"][0]["entidad"] = 11
+    app.session_state["report"] = data
+    with patch("bcra.fetch_entities", side_effect=BCRAError("No disponible")):
+        app.run()
+    assert not app.exception
+    assert app.warning
+    assert app.dataframe[1].value.loc[0, "entidad"] == 11
+    assert len(app.get("plotly_chart")) == 3
+    app.run()
+    assert not app.exception
+    assert app.dataframe[1].value.loc[0, "nombreEntidad"] == "Banco de prueba"

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from bcra import checks_frame, debt_frame, fetch_report, normalize_cuit
+from bcra import BCRAError, checks_frame, debt_frame, fetch_entities, fetch_report, normalize_cuit
 from charts import checks_chart, debt_chart, situation_chart
 
 st.set_page_config(page_title="Tu Deuda · BCRA", page_icon="🏦", layout="wide")
@@ -28,6 +28,11 @@ def load_report(cuit: str):
     if report["errores"]:
         raise PartialReport(report)
     return report
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_entities():
+    return fetch_entities()
 
 
 class PartialReport(Exception):
@@ -138,6 +143,12 @@ st.divider()
 st.subheader("Cheques rechazados")
 st.caption("Monto total informado, agrupado por causal de rechazo. Importes en pesos argentinos (ARS).")
 if not cheques.empty:
+    try:
+        cheques = checks_frame(checks, load_entities())
+    except BCRAError:
+        st.warning("No se pudo cargar el catálogo de entidades. Los cheques se muestran con su código original; volvé a consultar para reintentar.")
+    if "nombreEntidad" in cheques and cheques["nombreEntidad"].str.startswith("Entidad no ").any():
+        st.info("Algunos códigos informados en los cheques no tienen correspondencia en el catálogo de entidades. Se conserva el código original sin asignar un banco por suposición.")
     total = pd.to_numeric(cheques["monto"], errors="raise").sum()
     st.metric("Monto de cheques rechazados", money(total))
     st.caption("Incluye todos los cheques devueltos por la API, incluso los que registran fecha de pago. No representa necesariamente un saldo pendiente.")
@@ -146,7 +157,7 @@ if not cheques.empty:
     else:
         st.info("Los cheques informados no tienen un monto positivo para graficar.")
     st.markdown("#### Detalle de todos los cheques")
-    st.caption("Se conservan los nombres y todos los campos de la API. entidad es el código de entidad del BCRA; las celdas vacías corresponden a valores nulos.")
+    st.caption("Se conservan todos los campos de la API. entidad es el código original y nombreEntidad es su denominación según el catálogo del BCRA. Las celdas vacías corresponden a valores nulos.")
     st.dataframe(cheques.style.format({"monto": money}, na_rep="—"), hide_index=True, width="stretch",
                  column_config={"monto": "monto (ARS)",
                                 "nroCheque": st.column_config.NumberColumn("nroCheque", format="%d"),

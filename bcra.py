@@ -10,6 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BASE_URL = "https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas"
+ENTITIES_URL = "https://api.bcra.gob.ar/cheques/v1.0/entidades"
 ENDPOINTS = {"actual": "", "historicas": "Historicas/", "cheques": "ChequesRechazados/"}
 
 
@@ -29,15 +30,14 @@ def normalize_cuit(value: str) -> str:
     return digits
 
 
-def fetch_endpoint(kind: str, cuit: str) -> dict:
-    cuit = normalize_cuit(cuit)
+def _get_payload(url: str, allow_not_found: bool = False) -> dict:
     retry = Retry(total=2, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
     try:
         with requests.Session() as session:
             session.mount("https://", HTTPAdapter(max_retries=retry))
-            response = session.get(f"{BASE_URL}/{ENDPOINTS[kind]}{cuit}", timeout=(8, 30))
-        if response.status_code == 404:
-            return {}
+            response = session.get(url, timeout=(8, 30))
+        if response.status_code == 404 and allow_not_found:
+            return {"status": 404}
         response.raise_for_status()
         payload = response.json()
     except requests.exceptions.SSLError as exc:
@@ -50,6 +50,30 @@ def fetch_endpoint(kind: str, cuit: str) -> dict:
         raise BCRAError("El BCRA devolvió una respuesta que no es JSON válido.") from exc
     if not isinstance(payload, dict):
         raise BCRAError("La respuesta del BCRA tiene un formato inesperado.")
+    return payload
+
+
+def fetch_entities() -> dict[int, str]:
+    """Catálogo público de entidades habilitadas para operar con cheques."""
+    payload = _get_payload(ENTITIES_URL)
+    records = payload.get("results")
+    if payload.get("status") != 200 or not isinstance(records, list) or not records:
+        raise BCRAError("El catálogo de entidades del BCRA no está disponible.")
+    try:
+        catalog = {}
+        for record in records:
+            name = record["denominacion"]
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("Denominación vacía")
+            catalog[int(record["codigoEntidad"])] = name
+        return catalog
+    except (KeyError, TypeError, ValueError) as exc:
+        raise BCRAError("El catálogo de entidades del BCRA tiene un formato inesperado.") from exc
+
+
+def fetch_endpoint(kind: str, cuit: str) -> dict:
+    cuit = normalize_cuit(cuit)
+    payload = _get_payload(f"{BASE_URL}/{ENDPOINTS[kind]}{cuit}", allow_not_found=True)
     if payload.get("status") == 404:
         return {}
     if payload.get("status") != 200 or not isinstance(payload.get("results"), dict):
@@ -93,11 +117,17 @@ def debt_frame(historical: dict | None, current: dict | None) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def checks_frame(result: dict | None) -> pd.DataFrame:
+def checks_frame(result: dict | None, entities: dict[int, str] | None = None) -> pd.DataFrame:
     """Una fila por cheque, conservando TODOS sus campos y el contexto."""
     rows = []
     for cause in (result or {}).get("causales", []):
         for entity in cause.get("entidades", []):
             for check in entity.get("detalle", []):
                 rows.append({"causal": cause.get("causal"), "entidad": entity.get("entidad"), **check})
-    return pd.json_normalize(rows)
+    frame = pd.json_normalize(rows)
+    if entities is not None and not frame.empty:
+        codes = pd.to_numeric(frame["entidad"], errors="coerce")
+        names = codes.map(entities)
+        fallback = frame["entidad"].map(lambda code: f"Entidad no identificada (código {code})" if pd.notna(code) else "Entidad no informada")
+        frame.insert(2, "nombreEntidad", names.fillna(fallback))
+    return frame

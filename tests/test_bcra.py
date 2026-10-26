@@ -4,7 +4,7 @@ import pytest
 import requests
 import pandas as pd
 
-from bcra import BCRAError, checks_frame, debt_frame, fetch_endpoint, fetch_report, normalize_cuit
+from bcra import BCRAError, checks_frame, debt_frame, fetch_endpoint, fetch_entities, fetch_report, normalize_cuit
 from charts import checks_chart, debt_chart, situation_chart, SITUATIONS
 
 
@@ -104,7 +104,7 @@ def test_404_is_no_records():
     assert call_with_response(api_response(404)) == {}
 
 
-@pytest.mark.parametrize("payload", [[], {"status": 500}, {"status": 200, "results": {}}, "html"])
+@pytest.mark.parametrize("payload", [{}, [], {"status": 500}, {"status": 200, "results": {}}, "html"])
 def test_bad_response_is_error(payload):
     with pytest.raises(BCRAError):
         call_with_response(api_response(payload=payload))
@@ -125,3 +125,32 @@ def test_partial_failure_keeps_successful_sections():
     assert report["actual"] is not None
     assert report["historicas"] is None
     assert report["errores"] == {"historicas": "No disponible"}
+
+
+def test_entity_catalog_only_matches_verified_codes():
+    payload = {"status": 200, "results": [{"codigoEntidad": 11, "denominacion": "Banco de prueba"}]}
+    with patch("bcra.requests.Session") as session:
+        session.return_value.__enter__.return_value.get.return_value = api_response(payload=payload)
+        catalog = fetch_entities()
+    result = {"causales": [{"causal": "SIN FONDOS", "entidades": [
+        {"entidad": "00011", "detalle": [{"nroCheque": 1, "monto": 100, "extra": "conservar"}]},
+        {"entidad": 1, "detalle": [{"nroCheque": 2, "monto": 200}]},
+    ]}]}
+    frame = checks_frame(result, catalog)
+    assert frame.loc[0, "nombreEntidad"] == "Banco de prueba"
+    assert frame.loc[0, "entidad"] == "00011"
+    assert frame.loc[0, "extra"] == "conservar"
+    assert frame.loc[1, "nombreEntidad"] == "Entidad no identificada (código 1)"
+    assert len(frame) == 2 and frame.monto.sum() == 300
+
+
+@pytest.mark.parametrize("payload", [
+    {"status": 404}, {"status": 200, "results": []}, {"status": 200, "results": {}},
+    {"status": 200, "results": [{"codigoEntidad": 11}]},
+    {"status": 200, "results": [{"codigoEntidad": "abc", "denominacion": "Banco"}]},
+])
+def test_invalid_catalog_is_a_recoverable_error(payload):
+    with patch("bcra.requests.Session") as session:
+        session.return_value.__enter__.return_value.get.return_value = api_response(payload=payload)
+        with pytest.raises(BCRAError):
+            fetch_entities()
