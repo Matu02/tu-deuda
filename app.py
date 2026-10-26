@@ -147,8 +147,8 @@ if not cheques.empty:
         st.info("Los cheques informados no tienen un monto positivo para graficar.")
     st.markdown("#### Detalle de todos los cheques")
     st.caption("Se conservan los nombres y todos los campos de la API. entidad es el código de entidad del BCRA; las celdas vacías corresponden a valores nulos.")
-    st.dataframe(cheques, hide_index=True, width="stretch",
-                 column_config={"monto": st.column_config.NumberColumn("monto (ARS)", format="%.2f"),
+    st.dataframe(cheques.style.format({"monto": money}, na_rep="—"), hide_index=True, width="stretch",
+                 column_config={"monto": "monto (ARS)",
                                 "nroCheque": st.column_config.NumberColumn("nroCheque", format="%d"),
                                 "entidad": st.column_config.NumberColumn("entidad", format="%d")})
     csv_download(cheques, f"cheques_{report['cuit']}.csv", "Descargar todos los cheques (CSV)")
