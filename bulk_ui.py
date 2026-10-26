@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from bcra import BCRAError
+from bcra_errors import BCRAError
 from bulk import BatchJob, extract_cuits, read_table, report_frames, restore_job
 from charts import checks_chart, companies_chart
 from formatting import money
@@ -33,7 +33,7 @@ def render_bulk(load_entities):
     st.write("Adjuntá la lista de clientes. Se consultan únicamente sus cheques rechazados y se seleccionan los que tengan fecha de rechazo igual al día elegido.")
     today = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).date()
     target = st.date_input("Fecha de rechazo", value=today, max_value=today)
-    uploaded = st.file_uploader("Archivo de clientes (Excel o CSV, hasta 20 MB)", type=["xlsx", "csv"], key="bulk_upload")
+    uploaded = st.file_uploader("Insertar Excel/CSV con CUITs", type=["xlsx", "csv"], key="bulk_upload", help="Excel .xlsx o CSV de hasta 20 MB. Podés elegir la columna y la primera fila con CUIT.")
     interval = st.selectbox("Pausa entre consultas", options=[2, 5, 1], format_func=lambda s: f"{s} segundo{'s' if s != 1 else ''}")
     st.caption("Una consulta de cheques por CUIT único, más el catálogo de entidades. Sin consultas de deudores. Los reintentos y demoras del BCRA pueden extender el tiempo. El ritmo se comparte entre sesiones de este servidor (mínimo 1 segundo entre solicitudes), pero no entre servidores distintos.")
     if uploaded is not None:

@@ -29,7 +29,6 @@ def test_upload_to_daily_report_without_any_debt_requests():
 
     with patch("streamlit.file_uploader", side_effect=upload), patch("bcra.fetch_entities", return_value={11: "Banco de prueba"}), patch("bulk.fetch_endpoint", return_value=sample()) as fetch, patch.object(BatchJob, "start", start):
         app = AppTest.from_file("app.py").run()
-        app.radio[0].set_value("Cheques por archivo").run()
         assert not app.exception
         app.date_input[0].set_value(date(2026, 1, 12)).run()
         next(b for b in app.button if b.label == "Iniciar nuevo lote").click().run()
@@ -49,7 +48,7 @@ def test_failed_or_pending_cuits_never_claim_a_complete_empty_report():
         "30000000007": {"estado": "error", "cheques": [], "razon_social": "", "error": "BCRA no disponible"}})
     app = AppTest.from_file("app.py").run()
     app.session_state["bulk_job"] = job
-    app.radio[0].set_value("Cheques por archivo").run()
+    app.run()
     assert not app.exception
     assert app.warning
     assert not any("No se encontraron" in i.value for i in app.info)
@@ -60,7 +59,7 @@ def test_completed_no_matches_shows_empty_daily_report():
     job = BatchJob(["30000000007"], "2026-01-10", records={"30000000007": data})
     app = AppTest.from_file("app.py").run()
     app.session_state["bulk_job"] = job
-    app.radio[0].set_value("Cheques por archivo").run()
+    app.run()
     assert not app.exception
     assert any("No se encontraron" in i.value for i in app.info)
     assert not app.get("plotly_chart")

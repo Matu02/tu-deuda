@@ -23,7 +23,7 @@ Ingresar el CUIT de la empresa a consultar y pulsar **Consultar BCRA**.
 
 ## Cheques rechazados por archivo
 
-En la pantalla inicial elegir **Cheques por archivo** y adjuntar un Excel `.xlsx`
+Debajo del buscador individual, usar **Insertar Excel/CSV con CUITs** para adjuntar un Excel `.xlsx`
 o un `.csv` (hasta 20 MB). Elegir hoja, columna (A por defecto), primera fila con
 datos (2 por defecto) y fecha de rechazo (hoy en Argentina por defecto). Se muestra
 una vista previa antes de consultar. Los CUIT se normalizan y validan, se omiten

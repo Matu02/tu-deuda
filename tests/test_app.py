@@ -25,6 +25,15 @@ def report_fixture():
     }
 
 
+def test_initial_screen_has_individual_search_and_file_upload_together():
+    app = AppTest.from_file("app.py").run()
+    assert not app.exception
+    assert app.text_input[0].label == "CUIT de la empresa"
+    assert not app.radio
+    labels = [widget.proto.label for widget in app.get("file_uploader")]
+    assert "Insertar Excel/CSV con CUITs" in labels
+
+
 def test_submit_renders_three_charts_and_full_table():
     app = AppTest.from_file("app.py").run()
     assert not app.exception
@@ -48,6 +57,7 @@ def test_invalid_cuit_does_not_call_bcra():
     assert not app.exception
     assert app.error
     fetch.assert_not_called()
+    assert any(w.proto.label == "Insertar Excel/CSV con CUITs" for w in app.get("file_uploader"))
 
 
 def test_partial_and_empty_states():

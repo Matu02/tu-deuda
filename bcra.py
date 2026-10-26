@@ -11,25 +11,11 @@ from email.utils import parsedate_to_datetime
 import pandas as pd
 import requests
 
+from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit
+
 BASE_URL = "https://api.bcra.gob.ar/centraldedeudores/v1.0/Deudas"
 ENTITIES_URL = "https://api.bcra.gob.ar/cheques/v1.0/entidades"
 ENDPOINTS = {"actual": "", "historicas": "Historicas/", "cheques": "ChequesRechazados/"}
-
-
-class BCRAError(Exception):
-    """Error consultable sin exponer detalles internos de red."""
-
-
-class BCRARateLimit(BCRAError):
-    """El servidor sigue limitando las solicitudes luego de los reintentos."""
-
-
-class BCRACooldown(BCRAError):
-    """El servicio pidió una espera larga; devolver el control a la interfaz."""
-
-
-class BCRACancelled(BCRAError):
-    """Consulta pausada por el usuario."""
 
 
 class RequestGate:

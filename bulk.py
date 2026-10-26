@@ -11,7 +11,8 @@ import threading
 
 import pandas as pd
 
-from bcra import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit, checks_frame, fetch_endpoint, normalize_cuit
+from bcra import checks_frame, fetch_endpoint, normalize_cuit
+from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit
 
 
 def read_table(content: bytes, filename: str, sheet=0) -> pd.DataFrame:
