@@ -40,9 +40,9 @@ def _active():
 
 def render_bulk(load_entities):
     st.subheader("Cheques rechazados por archivo")
-    st.write("Adjuntá la lista de clientes. Se consultan únicamente sus cheques rechazados y se seleccionan los que tengan fecha de rechazo igual al día elegido.")
+    st.write("Adjuntá la lista de clientes. Se registran todos los cheques rechazados que informa el BCRA para cada CUIT, sin filtrar por fecha de rechazo.")
     today = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).date()
-    target = st.date_input("Fecha de rechazo", value=today, max_value=today)
+    target = today
     uploaded = st.file_uploader("Insertar Excel/CSV con CUITs", type=["xlsx", "csv"], key="bulk_upload", help="Excel .xlsx o CSV de hasta 20 MB. Podés elegir la columna y la primera fila con CUIT.")
     st.caption("Hasta 3 solicitudes por segundo y 3 consultas simultáneas por lote. Una consulta de cheques por CUIT único, más el catálogo de entidades. El ritmo se comparte entre sesiones de este servidor e incluye los reintentos; no se coordina entre servidores distintos. Las esperas indicadas por el BCRA se respetan automáticamente.")
     if uploaded is not None:
@@ -111,7 +111,7 @@ def render_progress():
     pending = total - attempted
     st.divider()
     st.subheader(f"Reporte de cheques · {snapshot['fecha']}")
-    st.caption("Este reporte conserva los CUIT y la fecha con los que se inició. Cambiar los controles de carga no modifica el lote actual.")
+    st.caption("La fecha del reporte corresponde al inicio de la consulta, no a la fecha de rechazo. Se incluyen todos los cheques informados.")
     st.progress(attempted / total if total else 0, text=f"{attempted} de {total} CUIT procesados · {ok} completos · {problems} con errores o datos parciales · {pending} pendientes")
     st.caption(snapshot["mensaje"])
     if not job.can_resume():
@@ -126,7 +126,7 @@ def render_progress():
     if snapshot["running"] or pending or problems:
         st.warning("Reporte parcial: los totales corresponden sólo a los cheques obtenidos hasta ahora. Los CUIT pendientes o con error no se consideran empresas sin cheques.")
     if not summary.empty and summary["fechas_invalidas"].sum():
-        st.warning("Hay cheques cuya fecha de rechazo no se pudo interpretar. No se incluyen en los totales; esos CUIT quedan marcados como parciales para reintentar.")
+        st.warning("Hay cheques con fechas de rechazo no informadas o no interpretables. Se conservan en el detalle y se incluyen en los totales.")
     if st.session_state.get("bulk_catalog_error"):
         st.caption("Catálogo no disponible: se conservan los códigos de entidad originales.")
     count = frame["CUIT"].nunique() if not frame.empty else 0
@@ -135,7 +135,7 @@ def render_progress():
     a.metric("Empresas con cheques rechazados", count)
     b.metric("Monto total rechazado (ARS)", money(amount))
     c.metric("Cheques rechazados", len(frame))
-    st.caption("Se filtra por fechaRechazo, no por fecha de consulta. Se incluyen los cheques del día seleccionado aunque luego hayan sido pagados; no es necesariamente saldo pendiente. La publicación del BCRA puede tener demoras.")
+    st.caption("Incluye todos los cheques devueltos por el BCRA, incluso los pagados posteriormente. El total rechazado no representa necesariamente saldo pendiente.")
     if not frame.empty:
         if amount > 0:
             left, right = st.columns(2)
@@ -154,7 +154,7 @@ def render_progress():
         st.download_button("Descargar todos los cheques (CSV)", frame.to_csv(index=False).encode("utf-8-sig"),
                            f"cheques_lote_{snapshot['fecha']}.csv", "text/csv")
     elif not snapshot["running"] and not pending and not problems:
-        st.info("No se encontraron cheques rechazados con esa fecha en los CUIT consultados.")
+        st.info("El BCRA no informó cheques rechazados para los CUIT consultados.")
     with st.expander("Estado de cada CUIT, incluidos errores y pendientes"):
         st.dataframe(summary.head(500), hide_index=True, width="stretch")
         st.download_button("Descargar resumen de empresas (CSV)", summary.to_csv(index=False).encode("utf-8-sig"),

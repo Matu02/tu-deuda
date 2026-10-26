@@ -10,7 +10,7 @@ import pytest
 
 from bcra import BCRACancelled, BCRACooldown, BCRARateLimit, RequestGate, _get_payload, retry_after_seconds
 from bcra_errors import BCRAUnavailable
-from bulk import BatchJob, daily_result, extract_cuits, read_table, report_frames, restore_job
+from bulk import BatchJob, checks_result, extract_cuits, read_table, report_frames, restore_job
 from charts import companies_chart
 
 
@@ -58,16 +58,16 @@ def test_excel_custom_sheet_row_and_column_dedup_and_invalids():
     assert invalid.iloc[0]["fila"] == 5
 
 
-def test_daily_filter_keeps_full_fields_and_flags_unknown_dates():
+def test_all_rejection_dates_and_missing_dates_are_preserved():
     result = response()
     result["causales"][0]["entidades"][0]["detalle"].append({"monto": 42, "fechaRechazo": None})
-    daily = daily_result(result, "2026-01-12")
-    assert daily["estado"] == "parcial" and daily["fechas_invalidas"] == 1
-    assert len(daily["cheques"]) == 1
+    daily = checks_result(result)
+    assert daily["estado"] == "ok" and daily["fechas_invalidas"] == 1
+    assert len(daily["cheques"]) == 3
     assert daily["cheques"][0]["extra"] == "conservar"
     assert daily["cheques"][0]["monto"] == 100.25
     assert daily["razon_social"] == "Empresa sintética"
-    assert daily_result({}, "2026-01-12")["cheques"] == []
+    assert checks_result({})["cheques"] == []
 
 
 def run_job(job):
@@ -90,11 +90,11 @@ def test_3001_cuits_only_cheques_one_call_each_and_no_duplicate_on_resume():
         run_job(restored)
         assert fetch.call_count == 3001
     frame, summary = report_frames(restored.snapshot(), {11: "Banco sintético"})
-    assert len(frame) == 3001 and len(summary) == 3001
+    assert len(frame) == 6002 and len(summary) == 3001
     assert frame.CUIT.nunique() == 3001
     assert frame.nombreEntidad.eq("Banco sintético").all()
     assert frame.razon_social.eq("Empresa sintética").all()
-    assert frame.monto.sum() == pytest.approx(3001 * 100.25)
+    assert frame.monto.sum() == pytest.approx(3001 * 600.25)
 
 
 @pytest.mark.parametrize("error", [BCRARateLimit("HTTP 429"), BCRACooldown("HTTP 503: esperar"), BCRAUnavailable()])
@@ -116,13 +116,12 @@ def test_server_pause_stops_batch_and_resume_does_not_skip_failed_company(error)
     assert all(r["estado"] == "ok" for r in restored.snapshot()["resultados"].values())
 
 
-def test_checkpoint_rejects_wrong_day_or_bad_format():
+def test_checkpoint_allows_different_rejection_dates_but_rejects_bad_format():
     cuit = synthetic_cuit(1)
-    job = BatchJob([cuit], "2026-01-12", records={cuit: daily_result(response(), "2026-01-12")})
+    job = BatchJob([cuit], "2026-01-12", records={cuit: checks_result(response())})
     data = job.snapshot()
     data["fecha"] = "2026-01-13"
-    with pytest.raises(ValueError):
-        restore_job(json.dumps(data).encode())
+    assert len(restore_job(json.dumps(data).encode()).records[cuit]["cheques"]) == 2
     with pytest.raises(ValueError):
         restore_job(b'not-json')
 
@@ -306,3 +305,26 @@ def test_shared_503_deadline_prevents_new_calls():
     gate.unavailable((datetime.now(timezone.utc) + timedelta(seconds=10)).isoformat())
     with pytest.raises(BCRAUnavailable):
         gate.wait()
+
+
+def test_legacy_empty_completed_results_are_requeried():
+    cuit = synthetic_cuit(1)
+    job = BatchJob([cuit], "2026-01-12", records={cuit: checks_result({})})
+    checkpoint = job.snapshot()
+    checkpoint["version"] = 1
+    restored = restore_job(json.dumps(checkpoint).encode())
+    assert restored.records[cuit]["estado"] == "parcial"
+    with patch("bulk.fetch_endpoint", return_value=response()) as fetch:
+        run_job(restored)
+        assert fetch.call_count == 1
+    assert len(restored.records[cuit]["cheques"]) == 2
+    assert restored.snapshot()["version"] == 2
+
+
+def test_checkpoint_preserves_cheque_without_date():
+    cuit = synthetic_cuit(2)
+    result = response()
+    del result["causales"][0]["entidades"][0]["detalle"][0]["fechaRechazo"]
+    job = BatchJob([cuit], "2026-01-12", records={cuit: checks_result(result)})
+    restored = restore_job(json.dumps(job.snapshot()).encode())
+    assert len(restored.records[cuit]["cheques"]) == 2

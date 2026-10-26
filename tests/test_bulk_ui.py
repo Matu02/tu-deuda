@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
-from bulk import BatchJob, daily_result
+from bulk import BatchJob, checks_result
 
 
 def sample():
@@ -14,7 +14,7 @@ def sample():
         ]}]}]}
 
 
-def test_upload_to_daily_report_without_any_debt_requests():
+def test_upload_keeps_all_rejection_dates_without_any_debt_requests():
     uploaded = Mock(name="upload")
     uploaded.name = "clientes.csv"
     uploaded.getvalue.return_value = b"CUIT\n30000000007\n30-00000000-7\ninvalid\n"
@@ -30,14 +30,14 @@ def test_upload_to_daily_report_without_any_debt_requests():
     with patch("streamlit.file_uploader", side_effect=upload), patch("bcra.fetch_entities", return_value={11: "Banco de prueba"}), patch("bulk.fetch_endpoint", return_value=sample()) as fetch, patch.object(BatchJob, "start", start):
         app = AppTest.from_file("app.py").run()
         assert not app.exception
-        app.date_input[0].set_value(date(2026, 1, 12)).run()
         next(b for b in app.button if b.label == "Iniciar nuevo lote").click().run()
     assert not app.exception
+    assert not app.date_input
     assert fetch.call_count == 1 and fetch.call_args.args[0] == "cheques"
-    assert [m.value for m in app.metric] == ["1", "$ 1.234.567,89", "1"]
+    assert [m.value for m in app.metric] == ["1", "$ 11.234.566,89", "2"]
     assert len(app.get("plotly_chart")) == 2
     detail = next(d.value for d in app.dataframe if "razon_social" in d.value and "nroCheque" in d.value)
-    assert len(detail) == 1
+    assert len(detail) == 2
     assert detail.loc[0, "CUIT"] == "30000000007"
     assert detail.loc[0, "razon_social"] == "Empresa de prueba"
     assert detail.loc[0, "nombreEntidad"] == "Banco de prueba"
@@ -51,17 +51,17 @@ def test_failed_or_pending_cuits_never_claim_a_complete_empty_report():
     app.run()
     assert not app.exception
     assert app.warning
-    assert not any("No se encontraron" in i.value for i in app.info)
+    assert not any("no informó" in i.value for i in app.info)
 
 
-def test_completed_no_matches_shows_empty_daily_report():
-    data = daily_result(sample(), "2026-01-10")
+def test_completed_no_records_shows_empty_report():
+    data = checks_result({})
     job = BatchJob(["30000000007"], "2026-01-10", records={"30000000007": data})
     app = AppTest.from_file("app.py").run()
     app.session_state["bulk_job"] = job
     app.run()
     assert not app.exception
-    assert any("No se encontraron" in i.value for i in app.info)
+    assert any("no informó" in i.value for i in app.info)
     assert not app.get("plotly_chart")
 
 

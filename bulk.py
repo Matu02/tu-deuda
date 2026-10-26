@@ -67,21 +67,20 @@ def extract_cuits(table: pd.DataFrame, start_row=2, column=0):
     return cuits, pd.DataFrame(invalid), duplicates, blanks
 
 
-def daily_result(result: dict, target_date: str) -> dict:
+def checks_result(result: dict) -> dict:
     frame = checks_frame(result)
     invalid_dates = 0
     if not frame.empty:
-        if "fechaRechazo" not in frame or "monto" not in frame:
-            raise BCRAError("El detalle de cheques no incluye fechaRechazo o monto.")
-        dates = pd.to_datetime(frame["fechaRechazo"], errors="coerce", utc=True, format="mixed")
+        if "monto" not in frame:
+            raise BCRAError("El detalle de cheques no incluye monto.")
+        dates = pd.to_datetime(frame.get("fechaRechazo", pd.Series(index=frame.index, dtype="object")), errors="coerce", utc=True, format="mixed")
         invalid_dates = int(dates.isna().sum())
-        frame = frame.loc[dates.dt.strftime("%Y-%m-%d") == target_date].copy()
         amounts = pd.to_numeric(frame["monto"], errors="coerce")
         if amounts.isna().any() or not amounts.map(math.isfinite).all() or (amounts < 0).any():
             raise BCRAError("El BCRA devolvió un monto de cheque no válido.")
         frame["monto"] = amounts
-    return {"estado": "parcial" if invalid_dates else "ok",
-            "razon_social": result.get("denominacion") or "Razón social no informada",
+    return {"estado": "ok",
+            "razon_social": result.get("denominacion") or "",
             "cheques": json.loads(frame.to_json(orient="records")),
             "fechas_invalidas": invalid_dates,
             "consultado": datetime.now(timezone.utc).isoformat()}
@@ -134,7 +133,7 @@ class BatchJob:
                 limited = False
                 try:
                     result = fetch_endpoint("cheques", cuit, stop_event=self.stop_event)
-                    record = daily_result(result, self.target_date)
+                    record = checks_result(result)
                 except BCRACancelled:
                     return
                 except BCRAError as exc:
@@ -167,7 +166,7 @@ class BatchJob:
 
     def snapshot(self):
         with self.lock:
-            return {"version": 1, "fecha": self.target_date, "cuits": self.cuits.copy(),
+            return {"version": 2, "fecha": self.target_date, "cuits": self.cuits.copy(),
                     "resultados": deepcopy(self.records), "running": self.running, "mensaje": self.message, "reintentar_desde": self.retry_at}
 
 
@@ -177,7 +176,7 @@ def restore_job(content: bytes) -> BatchJob:
         if len(content) > 100 * 1024 * 1024:
             raise ValueError("Archivo de avance demasiado grande.")
         data = json.loads(content)
-        if data["version"] != 1 or not isinstance(data["cuits"], list) or not isinstance(data["resultados"], dict):
+        if data["version"] not in (1, 2) or not isinstance(data["cuits"], list) or not isinstance(data["resultados"], dict):
             raise ValueError("Formato de avance no válido.")
         target = date.fromisoformat(data["fecha"]).isoformat()
         cuits = list(dict.fromkeys(normalize_cuit(c) for c in data["cuits"]))
@@ -189,12 +188,20 @@ def restore_job(content: bytes) -> BatchJob:
             if not isinstance(record.get("error", ""), str) or not isinstance(record.get("fechas_invalidas", 0), int) or record.get("fechas_invalidas", 0) < 0:
                 raise ValueError("Estado de consulta no válido.")
             for check in record["cheques"]:
-                if not isinstance(check, dict) or not {"monto", "fechaRechazo", "entidad", "causal"} <= check.keys():
+                if not isinstance(check, dict) or not {"monto", "entidad", "causal"} <= check.keys():
                     raise ValueError("Detalle de cheques incompleto.")
                 amount = check["monto"]
-                if str(check["fechaRechazo"])[:10] != target or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
+                if not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
                     raise ValueError("Detalle de cheques no válido.")
+        legacy = data["version"] == 1
+        if legacy:
+            for record in data["resultados"].values():
+                if record["estado"] == "ok":
+                    record["estado"] = "parcial"
+                    record["error"] = "Consulta anterior filtrada por fecha: requiere nueva consulta completa."
         job = BatchJob(cuits, target, records=data["resultados"])
+        if legacy:
+            job.message = "Avance anterior filtrado por fecha. Al continuar, se volverán a consultar todos los CUIT para obtener los resultados completos."
         retry_at = data.get("reintentar_desde")
         if retry_at is not None:
             parsed = datetime.fromisoformat(retry_at)

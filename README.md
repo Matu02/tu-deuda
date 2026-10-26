@@ -25,22 +25,26 @@ Ingresar el CUIT de la empresa a consultar y pulsar **Consultar BCRA**.
 
 Debajo del buscador individual, usar **Insertar Excel/CSV con CUITs** para adjuntar un Excel `.xlsx`
 o un `.csv` (hasta 20 MB). Elegir hoja, columna (A por defecto), primera fila con
-datos (2 por defecto) y fecha de rechazo (hoy en Argentina por defecto). Se muestra
+datos (2 por defecto). Se muestra
 una vista previa antes de consultar. Los CUIT se normalizan y validan, se omiten
 las filas vacías y se consulta una sola vez cada CUIT único. Las filas inválidas
 se informan y se pueden descargar para corregirlas.
 
 Este modo consulta **sólo ChequesRechazados**, no deudas ni historial de deuda.
-Como el endpoint no ofrece un filtro por fecha, se descarga su respuesta y se
-seleccionan los cheques cuya `fechaRechazo` coincide con la fecha elegida. La
-razón social se obtiene de `results.denominacion`. No hay garantía de que el BCRA
-ya haya publicado todos los cheques del día; un reporte de hoy puede estar vacío.
+Se registran **todos** los cheques que devuelve la API, sin filtrar por
+`fechaRechazo`. La razón social se obtiene de `results.denominacion`. La fecha
+mostrada en el título identifica el inicio de la consulta, no restringe los resultados.
 
-El reporte muestra empresas con cheques del día, cantidad y monto total en ARS,
-torta por causal, top 10 empresas por monto (con el resto agrupado), y hasta 500
-filas de vista previa. Los CSV de detalle y resumen incluyen todos los resultados,
-CUIT, razón social, campos originales y nombres de entidades cuando están disponibles.
-Los pagos posteriores no excluyen un cheque rechazado en la fecha seleccionada.
+El reporte muestra empresas con cheques, cantidad y monto total en ARS, torta por
+causal, top 10 empresas por monto (con el resto agrupado), y hasta 500 filas de
+vista previa. Los CSV incluyen todos los resultados, CUIT, razón social y todos
+los campos de cada cheque. Se incluyen cheques pagados y con fecha de rechazo
+vacía o no interpretable; el monto rechazado no es necesariamente saldo pendiente.
+
+Los nuevos archivos de avance usan versión 2. Al cargar uno de versión 1, que
+filtraba por fecha, los CUIT completados se marcan como parciales para volver a
+consultarlos. Los resultados descartados no pueden recuperarse del JSON viejo:
+se necesita una nueva consulta. Los avances v2 completos no repiten esos CUIT.
 
 ### Ritmo, errores y reanudación
 
@@ -72,8 +76,8 @@ Los pagos posteriores no excluyen un cheque rechazado en la fecha seleccionada.
 - El avance en vivo reside en la memoria de la sesión. Un reinicio del servidor o
   la pérdida de la sesión puede perder el avance no descargado. No hay una cola
   persistente ni garantía de ejecución en un alojamiento que suspenda el servidor.
-  El JSON conserva la fecha original: para volver a consultar los mismos CUIT en
-  otro día o refrescar datos ya completados, iniciar un nuevo lote con el archivo.
+  El JSON conserva la fecha original de consulta. Para refrescar resultados ya
+  completados, iniciar un nuevo lote con el archivo.
 
 Los archivos de clientes y avances no se escriben en el repositorio ni se comparten
 en una caché global. El JSON descargado contiene información interna. La app no
