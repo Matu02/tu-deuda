@@ -12,6 +12,7 @@ from bcra_errors import BCRAError
 from bulk_ui import render_bulk
 from charts import checks_chart, debt_chart, situation_chart
 from formatting import money
+from exports import data_downloads
 
 st.set_page_config(page_title="Tu Deuda · BCRA", page_icon="🏦", layout="wide")
 st.markdown("""<style>
@@ -41,11 +42,6 @@ def load_entities():
 class PartialReport(Exception):
     def __init__(self, report):
         self.report = report
-
-
-def csv_download(frame, name, label):
-    st.download_button(label, frame.to_csv(index=False).encode("utf-8-sig"),
-                       file_name=name, mime="text/csv")
 
 
 st.markdown('<div class="eyebrow">INFORMACIÓN CREDITICIA · ARGENTINA</div>', unsafe_allow_html=True)
@@ -132,7 +128,7 @@ def render_individual():
         with st.expander("Ver detalle de las deudas por mes y entidad"):
             st.caption("monto: miles de ARS originales del BCRA · monto_ars: pesos argentinos.")
             st.dataframe(debts, hide_index=True, width="stretch")
-            csv_download(debts, f"deudas_{report['cuit']}.csv", "Descargar deudas (CSV)")
+            data_downloads(debts, f"deudas_{report['cuit']}", "Descargar deudas")
     elif current is None or historical is None:
         st.info("No hay datos de deuda disponibles en las consultas que respondieron.")
     else:
@@ -161,7 +157,7 @@ def render_individual():
                      column_config={"monto": "monto (ARS)",
                                     "nroCheque": st.column_config.NumberColumn("nroCheque", format="%d"),
                                     "entidad": st.column_config.NumberColumn("entidad", format="%d")})
-        csv_download(cheques, f"cheques_{report['cuit']}.csv", "Descargar todos los cheques (CSV)")
+        data_downloads(cheques, f"cheques_{report['cuit']}", "Descargar todos los cheques")
     elif checks is not None:
         st.info("El BCRA no informa cheques rechazados para este CUIT.")
     else:

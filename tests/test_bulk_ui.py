@@ -36,6 +36,9 @@ def test_upload_keeps_all_rejection_dates_without_any_debt_requests():
     assert fetch.call_count == 1 and fetch.call_args.args[0] == "cheques"
     assert [m.value for m in app.metric] == ["1", "$ 11.234.566,89", "2"]
     assert len(app.get("plotly_chart")) == 2
+    downloads = {w.proto.label for w in app.get("download_button")}
+    assert {"Descargar filas inválidas (Excel)", "Descargar todos los cheques (Excel)",
+            "Descargar resumen de empresas (Excel)", "Descargar resumen de empresas (CSV)"} <= downloads
     detail = next(d.value for d in app.dataframe if "razon_social" in d.value and "nroCheque" in d.value)
     assert len(detail) == 2
     assert detail.loc[0, "CUIT"] == "30000000007"

@@ -47,6 +47,9 @@ def test_submit_renders_three_charts_and_full_table():
     assert "fechaPago" in app.dataframe[1].value.columns
     assert app.dataframe[1].value.loc[0, "nombreEntidad"] == "Entidad no identificada (código 1)"
     assert app.metric[0].value == "$ 10.000,00"
+    downloads = {w.proto.label for w in app.get("download_button")}
+    assert {"Descargar deudas (Excel)", "Descargar deudas (CSV)",
+            "Descargar todos los cheques (Excel)", "Descargar todos los cheques (CSV)"} <= downloads
 
 
 def test_invalid_cuit_does_not_call_bcra():

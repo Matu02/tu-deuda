@@ -151,7 +151,8 @@ def test_request_gate_waits_and_honors_shared_cooldown():
         gate.wait(event)
 
 
-def test_parallel_batch_shares_three_per_second_limit_at_http_layer():
+@pytest.mark.parametrize("analysis", ["cheques", "ambos"])
+def test_parallel_batch_shares_three_per_second_limit_at_http_layer(analysis):
     gate = RequestGate()
     starts = []
     active = 0
@@ -167,13 +168,13 @@ def test_parallel_batch_shares_three_per_second_limit_at_http_layer():
         try:
             time.sleep(0.8)
             response = Mock(status_code=200)
-            response.json.return_value = {"status": 200, "results": {"causales": [], "denominacion": "Empresa sintética"}}
+            response.json.return_value = {"status": 200, "results": {"causales": [], "periodos": [], "denominacion": "Empresa sintética"}}
             return response
         finally:
             with lock:
                 active -= 1
 
-    job = BatchJob([synthetic_cuit(i) for i in range(6)], "2026-01-12")
+    job = BatchJob([synthetic_cuit(i) for i in range(3 if analysis == "ambos" else 6)], "2026-01-12", analysis=analysis)
     with patch("bcra._REQUEST_GATE", gate), patch("bcra.requests.Session") as session:
         session.return_value.__enter__.return_value.get.side_effect = get
         run_job(job)
@@ -318,7 +319,7 @@ def test_legacy_empty_completed_results_are_requeried():
         run_job(restored)
         assert fetch.call_count == 1
     assert len(restored.records[cuit]["cheques"]) == 2
-    assert restored.snapshot()["version"] == 3
+    assert restored.snapshot()["version"] == 4
 
 
 def test_checkpoint_preserves_cheque_without_date():

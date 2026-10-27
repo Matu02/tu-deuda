@@ -1,4 +1,4 @@
-"""Importación y trabajo por lotes. Nunca consulta deudas ni historial."""
+"""Importación y consultas por lotes de cheques y deuda actual."""
 
 from copy import deepcopy
 from collections import deque
@@ -13,7 +13,7 @@ import threading
 
 import pandas as pd
 
-from bcra import checks_frame, fetch_endpoint, normalize_cuit
+from bcra import checks_frame, debt_frame, fetch_endpoint, normalize_cuit
 from bcra_errors import BCRACancelled, BCRACooldown, BCRAError, BCRARateLimit, BCRAUnavailable
 from rate_policy import MAX_BATCH_WORKERS
 
@@ -88,14 +88,42 @@ def checks_result(result: dict, rejection_date=None) -> dict:
             "consultado": datetime.now(timezone.utc).isoformat()}
 
 
+def debt_result(result):
+    frame = debt_frame(None, result)
+    if not frame.empty:
+        amounts = pd.to_numeric(frame["monto"], errors="coerce")
+        if amounts.isna().any() or not amounts.map(math.isfinite).all() or (amounts < 0).any():
+            raise BCRAError("El BCRA devolvió un monto de deuda no válido.")
+        if not frame["periodo"].map(lambda p: isinstance(p, str) and bool(re.fullmatch(r"[0-9]{4}(0[1-9]|1[0-2])", p))).all():
+            raise BCRAError("El BCRA devolvió un período de deuda no válido.")
+        frame["monto_ars"] = amounts * 1000
+        if not frame["monto_ars"].map(math.isfinite).all():
+            raise BCRAError("El monto de deuda está fuera de rango.")
+    return {"estado": "ok", "razon_social": result.get("denominacion") or "",
+            "deudas": json.loads(frame.to_json(orient="records", double_precision=15)),
+            "consultado": datetime.now(timezone.utc).isoformat()}
+
+
+def endpoint_status(record, kind):
+    return record.get("estados_consulta", {}).get(kind, record.get("estado", "pendiente") if kind == "cheques" else "pendiente")
+
+
 class BatchJob:
     """Hasta tres consultas en vuelo, sin llamadas a Streamlit desde trabajadores."""
 
-    def __init__(self, cuits, target_date, records=None, rejection_date=None):
+    def __init__(self, cuits, target_date, records=None, rejection_date=None, analysis="cheques"):
+        if analysis not in ("cheques", "deudas", "ambos"):
+            raise ValueError("Tipo de análisis no válido.")
+        self.analysis = analysis
+        self.kinds = ("cheques", "actual") if analysis == "ambos" else (("actual",) if analysis == "deudas" else ("cheques",))
         self.cuits = list(dict.fromkeys(normalize_cuit(c) for c in cuits))
         self.target_date = date.fromisoformat(str(target_date)).isoformat()
         self.rejection_date = date.fromisoformat(rejection_date).isoformat() if rejection_date else None
         self.records = deepcopy(records or {})
+        for record in self.records.values():
+            record.setdefault("estados_consulta", {k: endpoint_status(record, k) for k in self.kinds})
+            record.setdefault("errores_consulta", {k: record.get("error", "") for k in self.kinds})
+            record.setdefault("deudas", [])
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.running = False
@@ -113,7 +141,7 @@ class BatchJob:
             self.running = True
             self.retry_at = None
             self.stop_event.clear()
-            self.message = "Consultando cheques rechazados…"
+            self.message = "Consultando los análisis seleccionados…"
             self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
@@ -124,7 +152,8 @@ class BatchJob:
         consecutive_errors = 0
         pause_reason = None
         with self.lock:
-            pending = deque(c for c in self.cuits if self.records.get(c, {}).get("estado") != "ok")
+            pending = deque((c, kind) for c in self.cuits for kind in self.kinds
+                            if endpoint_status(self.records.get(c, {}), kind) != "ok")
 
         def worker():
             nonlocal consecutive_errors, pause_reason
@@ -132,11 +161,11 @@ class BatchJob:
                 with self.lock:
                     if self.stop_event.is_set() or not pending:
                         return
-                    cuit = pending.popleft()
+                    cuit, kind = pending.popleft()
                 limited = False
                 try:
-                    result = fetch_endpoint("cheques", cuit, stop_event=self.stop_event)
-                    record = checks_result(result, self.rejection_date)
+                    result = fetch_endpoint(kind, cuit, stop_event=self.stop_event)
+                    record = checks_result(result, self.rejection_date) if kind == "cheques" else debt_result(result)
                 except BCRACancelled:
                     return
                 except BCRAError as exc:
@@ -147,9 +176,27 @@ class BatchJob:
                             if exc.retry_at and (not self.retry_at or exc.retry_at > self.retry_at):
                                 self.retry_at = exc.retry_at
                 except Exception:
-                    record = {"estado": "error", "error": "No se pudo interpretar la respuesta de cheques.", "cheques": [], "razon_social": ""}
+                    record = {"estado": "error", "error": "No se pudo interpretar la respuesta del BCRA.", "cheques": [], "razon_social": ""}
                 with self.lock:
-                    self.records[cuit] = record
+                    previous = self.records.get(cuit, {})
+                    states = {k: endpoint_status(previous, k) for k in self.kinds}
+                    states[kind] = record["estado"]
+                    errors = dict(previous.get("errores_consulta", {}))
+                    errors[kind] = record.get("error", "")
+                    merged = {**previous, "cheques": previous.get("cheques", []), "deudas": previous.get("deudas", [])}
+                    field = "cheques" if kind == "cheques" else "deudas"
+                    merged[field] = record.get(field, [])
+                    if record.get("razon_social"):
+                        merged["razon_social"] = record["razon_social"]
+                    merged.setdefault("razon_social", "")
+                    if kind == "cheques":
+                        merged["fechas_invalidas"] = record.get("fechas_invalidas", 0)
+                    merged.update(estados_consulta=states, errores_consulta=errors,
+                                  estado="ok" if all(v == "ok" for v in states.values()) else
+                                  ("parcial" if any(v in ("ok", "parcial") for v in states.values()) else "error"),
+                                  error="; ".join(f"{k}: {v}" for k, v in errors.items() if v),
+                                  consultado=record.get("consultado", previous.get("consultado")))
+                    self.records[cuit] = merged
                     consecutive_errors = consecutive_errors + 1 if record["estado"] == "error" else 0
                     if limited or consecutive_errors >= 5:
                         pause_reason = record["error"] if limited else "Lote pausado tras 5 errores consecutivos. Revisá el servicio y reanudá más tarde."
@@ -169,7 +216,7 @@ class BatchJob:
 
     def snapshot(self):
         with self.lock:
-            return {"version": 3, "fecha_rechazo": self.rejection_date, "fecha": self.target_date, "cuits": self.cuits.copy(),
+            return {"version": 4, "analisis": self.analysis, "fecha_rechazo": self.rejection_date, "fecha": self.target_date, "cuits": self.cuits.copy(),
                     "resultados": deepcopy(self.records), "running": self.running, "mensaje": self.message, "reintentar_desde": self.retry_at}
 
 
@@ -179,7 +226,7 @@ def restore_job(content: bytes) -> BatchJob:
         if len(content) > 100 * 1024 * 1024:
             raise ValueError("Archivo de avance demasiado grande.")
         data = json.loads(content)
-        if data["version"] not in (1, 2, 3) or not isinstance(data["cuits"], list) or not isinstance(data["resultados"], dict):
+        if data["version"] not in (1, 2, 3, 4) or not isinstance(data["cuits"], list) or not isinstance(data["resultados"], dict):
             raise ValueError("Formato de avance no válido.")
         target = date.fromisoformat(data["fecha"]).isoformat()
         cuits = list(dict.fromkeys(normalize_cuit(c) for c in data["cuits"]))
@@ -196,13 +243,37 @@ def restore_job(content: bytes) -> BatchJob:
                 amount = check["monto"]
                 if not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0:
                     raise ValueError("Detalle de cheques no válido.")
+        analysis = data.get("analisis") if data["version"] == 4 else "cheques"
+        if analysis not in ("cheques", "deudas", "ambos"):
+            raise ValueError("Análisis no válido.")
+        if data["version"] == 4:
+            kinds = {"cheques", "actual"} if analysis == "ambos" else ({"actual"} if analysis == "deudas" else {"cheques"})
+            for record in data["resultados"].values():
+                states = record["estados_consulta"]
+                errors = record["errores_consulta"]
+                if not isinstance(states, dict) or set(states) != kinds or any(v not in ("ok", "parcial", "error", "pendiente") for v in states.values()):
+                    raise ValueError("Estados de endpoints no válidos.")
+                if not isinstance(errors, dict) or not set(errors) <= kinds or any(not isinstance(v, str) for v in errors.values()):
+                    raise ValueError("Errores de endpoints no válidos.")
+                if not isinstance(record.get("deudas"), list):
+                    raise ValueError("Deudas no válidas.")
+                for debt in record["deudas"]:
+                    if not isinstance(debt, dict) or not {"monto", "monto_ars", "periodo", "entidad"} <= debt.keys():
+                        raise ValueError("Detalle de deuda incompleto.")
+                    amount = debt["monto"]
+                    if not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0 or not math.isclose(debt["monto_ars"], amount * 1000, rel_tol=1e-12, abs_tol=1e-7) or not math.isfinite(debt["monto_ars"]):
+                        raise ValueError("Monto de deuda no válido.")
+                    if not isinstance(debt["periodo"], str) or not re.fullmatch(r"[0-9]{4}(0[1-9]|1[0-2])", debt["periodo"]):
+                        raise ValueError("Período no válido.")
         legacy = data["version"] == 1
         if legacy:
             for record in data["resultados"].values():
                 if record["estado"] == "ok":
                     record["estado"] = "parcial"
+                    record.pop("estados_consulta", None)
+                    record.pop("errores_consulta", None)
                     record["error"] = "Consulta anterior filtrada por fecha: requiere nueva consulta completa."
-        job = BatchJob(cuits, target, records=data["resultados"], rejection_date=data.get("fecha_rechazo") if data["version"] == 3 else None)
+        job = BatchJob(cuits, target, records=data["resultados"], rejection_date=data.get("fecha_rechazo") if data["version"] >= 3 else None, analysis=analysis)
         if legacy:
             job.message = "Avance anterior filtrado por fecha. Al continuar, se volverán a consultar todos los CUIT para obtener los resultados completos."
         retry_at = data.get("reintentar_desde")
@@ -223,11 +294,13 @@ def report_frames(snapshot, entities=None):
         record = snapshot["resultados"].get(cuit)
         checks = record.get("cheques", []) if record else []
         name = record.get("razon_social", "") if record else ""
-        observed = record is not None and record["estado"] in ("ok", "parcial")
+        observed = record is not None and endpoint_status(record, "cheques") in ("ok", "parcial")
         for check in checks:
             rows.append({**check, "CUIT": cuit, "razon_social": name})
         summary.append({"CUIT": cuit, "razon_social": name,
                         "estado": record["estado"] if record else "pendiente",
+                        **{f"estado_{label}": endpoint_status(record or {}, k) if snapshot.get("analisis", "cheques") in modes else "no solicitado"
+                           for k, label, modes in (("cheques", "cheques", ("cheques", "ambos")), ("actual", "deudas", ("deudas", "ambos")))},
                         "cantidad_cheques": len(checks) if observed else None,
                         "monto_total": sum(c["monto"] for c in checks) if observed else None,
                         "fechas_invalidas": record.get("fechas_invalidas", 0) if record else 0,
@@ -241,3 +314,21 @@ def report_frames(snapshot, entities=None):
         first = ["CUIT", "razon_social"]
         frame = frame[first + [c for c in frame if c not in first]]
     return frame, pd.DataFrame(summary)
+
+
+def debt_report_frames(snapshot):
+    rows, summary = [], []
+    for cuit in snapshot["cuits"]:
+        record = snapshot["resultados"].get(cuit, {})
+        name = record.get("razon_social", "")
+        debts = record.get("deudas", [])
+        state = endpoint_status(record, "actual")
+        periods = sorted({d["periodo"] for d in debts})
+        latest = periods[-1] if periods else None
+        for debt in debts:
+            rows.append({**debt, "CUIT": cuit, "razon_social": name})
+        summary.append({"CUIT": cuit, "razon_social": name, "estado": state,
+                        "periodo": latest,
+                        "deuda_ars": sum(d["monto_ars"] for d in debts if d["periodo"] == latest) if state == "ok" else None,
+                        "error": record.get("errores_consulta", {}).get("actual", "")})
+    return pd.DataFrame(rows), pd.DataFrame(summary)
