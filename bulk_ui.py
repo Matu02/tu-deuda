@@ -13,6 +13,7 @@ from bulk import BatchJob, debt_report_frames, extract_cuits, read_table, report
 from charts import checks_chart, companies_chart, debt_chart, situation_chart
 from formatting import money
 from exports import data_downloads
+from comparison_ui import capture_extraction, render_comparison
 from rate_policy import REQUESTS_PER_SECOND
 
 
@@ -175,9 +176,14 @@ def render_checks(snapshot, frame, summary, pending, problems):
         st.dataframe(frame.head(500).style.format({"monto": money}, na_rep="—"), hide_index=True, width="stretch",
                      column_config={"monto": "monto (ARS)", "CUIT": st.column_config.TextColumn("CUIT"),
                                     "razon_social": "Razón social", "nroCheque": st.column_config.NumberColumn(format="%d")})
-        data_downloads(frame, f"cheques_lote_{snapshot['fecha']}", "Descargar todos los cheques")
     elif not snapshot["running"] and not pending and not problems:
         st.info("El BCRA no informó cheques rechazados para los CUIT consultados.")
+    # Una extracción vacía también permite detectar que desaparecieron todos
+    # los cheques anteriores, siempre verificando el estado de cada CUIT.
+    export_frame = frame if not frame.empty else pd.DataFrame(columns=["CUIT", "razon_social", "entidad", "nroCheque", "fechaRechazo", "monto"])
+    data_downloads(export_frame, f"cheques_lote_{snapshot['fecha']}", "Descargar todos los cheques",
+                   on_click=capture_extraction, args=(export_frame, snapshot))
+    render_comparison()
 
 
 def render_debts(snapshot):

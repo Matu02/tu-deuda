@@ -108,6 +108,35 @@ Los archivos de clientes y avances no se escriben en el repositorio ni se compar
 en una caché global. El JSON descargado contiene información interna. La app no
 agrega autenticación: el acceso privado depende del alojamiento que se configure.
 
+### Comparar con una extracción anterior
+
+Después de descargar **Todos los cheques** en Excel o CSV, se habilita
+**Comparar con una extracción anterior**. Adjuntá el detalle Excel/CSV de otra
+extracción de Tu Deuda (hasta 20 MB) e indicá su fecha. Se propone el día anterior;
+también se pueden comparar extracciones más antiguas. El resumen de empresas y
+el avance JSON no sirven como detalle anterior.
+
+La comparación se hace **cheque por cheque**, usando CUIT, entidad, número de
+cheque y fecha de rechazo, con formatos normalizados. No realiza nuevas consultas
+a BCRA: conserva una copia de los datos y estados de la descarga actual. Una nueva
+descarga de Todos los cheques reinicia la comparación.
+
+La tabla distingue **Sigue informado**, **Posible pago: dejó de figurar**,
+**Nuevo en la extracción actual** y **No comparable**. La vista previa muestra
+hasta 500 filas y permite filtrar por resultado. **Descargar comparación completa
+(Excel)** incluye todas las filas, sin aplicar ese filtro, con los montos anteriores
+y actuales, fechas de extracción y los campos originales de ambos archivos.
+También se puede descargar en CSV y obtener un resumen de nuevos posibles pagos
+por empresa.
+
+Una desaparición no confirma el pago ni su fecha. Los registros que ya indicaban
+pago en el archivo anterior se identifican y no suman nuevos posibles pagos. La
+antigüedad desde el rechazo se informa como contexto: no se excluyen cheques por
+superar los 15 días. Las empresas no consultadas, las consultas de cheques
+pendientes, parciales o fallidas, los cheques fuera del filtro actual y las
+identidades incompletas o duplicadas ambiguas quedan como No comparable.
+Las extracciones vacías también se pueden descargar y comparar.
+
 ## Pruebas
 
 ```bash

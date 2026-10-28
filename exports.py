@@ -22,13 +22,15 @@ def excel_bytes(frame):
     return output.getvalue()
 
 
-def data_downloads(frame, name, label):
+def data_downloads(frame, name, label, on_click=None, args=None):
     csv, excel = st.columns(2)
     csv.download_button(
         f"{label} (CSV)", frame.to_csv(index=False).encode("utf-8-sig"),
         file_name=f"{name}.csv", mime="text/csv",
+        on_click=on_click, args=args,
     )
     excel.download_button(
         f"{label} (Excel)", excel_bytes(frame), file_name=f"{name}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        on_click=on_click, args=args,
     )
